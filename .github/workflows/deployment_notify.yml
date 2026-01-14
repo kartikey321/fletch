@@ -1,0 +1,60 @@
+name: Notify Discord on deployments
+
+on:
+  deployment_status:
+    types: [success]
+
+jobs:
+  notify-discord:
+    name: Notify Discord
+    if: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL != '' }}
+    runs-on: ubuntu-latest
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL }}
+    steps:
+      - name: Send Discord notification
+        env:
+          STATUS: ${{ github.event.deployment_status.state }}
+          ENVIRONMENT: ${{ github.event.deployment.environment }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.deployment.sha }}
+          ACTOR: ${{ github.actor }}
+          ENV_URL: ${{ github.event.deployment_status.environment_url }}
+          TARGET_URL: ${{ github.event.deployment_status.target_url }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          webhook = os.environ["DISCORD_WEBHOOK_URL"]
+
+          lines = [
+              f"✅ Deployment succeeded for {os.environ['REPO']}",
+              f"Environment: {os.environ.get('ENVIRONMENT', '')}",
+              f"Commit: {os.environ['SHA']}",
+              f"Triggered by: {os.environ['ACTOR']}",
+          ]
+
+          env_url = os.environ.get("ENV_URL")
+          target_url = os.environ.get("TARGET_URL")
+          if env_url:
+              lines.append(f"URL: {env_url}")
+          elif target_url:
+              lines.append(f"Target: {target_url}")
+
+          payload = {"content": "\n".join(lines)}
+
+          req = urllib.request.Request(
+              webhook,
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+
+          try:
+              urllib.request.urlopen(req)
+          except Exception as exc:
+              sys.stderr.write(f"Failed to send Discord notification: {exc}\n")
+              raise
+          PY

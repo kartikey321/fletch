@@ -25,3 +25,64 @@ jobs:
       - name: Publish Package
         working-directory: packages/fletch
         run: ./tool/publish.sh --yes
+
+      - name: Send Discord Notification
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_PUBLISH_WEBHOOK_URL }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "Discord webhook URL not configured, skipping notification"
+            exit 0
+          fi
+          
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+          if not webhook:
+              sys.exit(0)
+
+          tag = os.environ["TAG"]
+          repo = os.environ["REPO"]
+          actor = os.environ["ACTOR"]
+          
+          # Extract version from tag (e.g., v2.0.3 -> 2.0.3)
+          version = tag.lstrip('v')
+          
+          pub_url = f"https://pub.dev/packages/fletch/versions/{version}"
+
+          embed = {
+              "title": f"📦 New Fletch Release: {tag}",
+              "description": f"Successfully published to pub.dev",
+              "color": 5814783,  # Green color
+              "fields": [
+                  {"name": "Version", "value": version, "inline": True},
+                  {"name": "Published by", "value": actor, "inline": True},
+                  {"name": "Package", "value": f"[View on pub.dev]({pub_url})", "inline": False}
+              ],
+              "footer": {"text": repo}
+          }
+
+          payload = {"embeds": [embed]}
+
+          req = urllib.request.Request(
+              webhook,
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+
+          try:
+              urllib.request.urlopen(req)
+              print(f"Discord notification sent for {tag}")
+          except Exception as exc:
+              sys.stderr.write(f"Failed to send Discord notification: {exc}\n")
+              # Don't fail the workflow if Discord notification fails
+              sys.exit(0)
+          PY
