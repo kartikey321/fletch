@@ -15,6 +15,23 @@
       ]
     },
     {
+      "name": "fletch",
+      "version": "2.0.4",
+      "dependencies": [
+        "args",
+        "async",
+        "crypto",
+        "get_it",
+        "http",
+        "logger",
+        "meta",
+        "mime",
+        "uri",
+        "uuid",
+        "xml"
+      ]
+    },
+    {
       "name": "test",
       "version": "1.28.0",
       "dependencies": [
@@ -51,21 +68,86 @@
       "dependencies": []
     },
     {
-      "name": "fletch",
+      "name": "xml",
+      "version": "6.6.1",
+      "dependencies": [
+        "collection",
+        "meta",
+        "petitparser"
+      ]
+    },
+    {
+      "name": "uuid",
+      "version": "4.5.2",
+      "dependencies": [
+        "crypto",
+        "fixnum",
+        "meta"
+      ]
+    },
+    {
+      "name": "uri",
       "version": "1.0.0",
       "dependencies": [
-        "args",
-        "async",
-        "crypto",
-        "get_it",
-        "http",
-        "logger",
-        "meta",
-        "mime",
-        "uri",
-        "uuid",
-        "xml"
+        "matcher",
+        "quiver"
       ]
+    },
+    {
+      "name": "mime",
+      "version": "2.0.0",
+      "dependencies": []
+    },
+    {
+      "name": "meta",
+      "version": "1.17.0",
+      "dependencies": []
+    },
+    {
+      "name": "logger",
+      "version": "2.6.2",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
+      "name": "http",
+      "version": "1.6.0",
+      "dependencies": [
+        "async",
+        "http_parser",
+        "meta",
+        "web"
+      ]
+    },
+    {
+      "name": "get_it",
+      "version": "9.2.0",
+      "dependencies": [
+        "async",
+        "collection",
+        "meta"
+      ]
+    },
+    {
+      "name": "crypto",
+      "version": "3.0.7",
+      "dependencies": [
+        "typed_data"
+      ]
+    },
+    {
+      "name": "async",
+      "version": "2.13.0",
+      "dependencies": [
+        "collection",
+        "meta"
+      ]
+    },
+    {
+      "name": "args",
+      "version": "2.7.0",
+      "dependencies": []
     },
     {
       "name": "yaml",
@@ -290,14 +372,6 @@
       ]
     },
     {
-      "name": "async",
-      "version": "2.13.0",
-      "dependencies": [
-        "collection",
-        "meta"
-      ]
-    },
-    {
       "name": "analyzer",
       "version": "9.0.0",
       "dependencies": [
@@ -316,78 +390,39 @@
       ]
     },
     {
-      "name": "xml",
-      "version": "6.6.1",
+      "name": "petitparser",
+      "version": "7.0.1",
       "dependencies": [
         "collection",
-        "meta",
-        "petitparser"
-      ]
-    },
-    {
-      "name": "uuid",
-      "version": "4.5.2",
-      "dependencies": [
-        "crypto",
-        "fixnum",
         "meta"
       ]
     },
     {
-      "name": "uri",
-      "version": "1.0.0",
-      "dependencies": [
-        "matcher",
-        "quiver"
-      ]
-    },
-    {
-      "name": "mime",
-      "version": "2.0.0",
+      "name": "fixnum",
+      "version": "1.1.1",
       "dependencies": []
     },
     {
-      "name": "meta",
-      "version": "1.17.0",
+      "name": "quiver",
+      "version": "3.2.2",
+      "dependencies": [
+        "matcher"
+      ]
+    },
+    {
+      "name": "web",
+      "version": "1.1.1",
       "dependencies": []
     },
     {
-      "name": "logger",
-      "version": "2.6.2",
+      "name": "http_parser",
+      "version": "4.1.2",
       "dependencies": [
-        "meta"
-      ]
-    },
-    {
-      "name": "http",
-      "version": "1.6.0",
-      "dependencies": [
-        "async",
-        "http_parser",
-        "meta",
-        "web"
-      ]
-    },
-    {
-      "name": "get_it",
-      "version": "8.3.0",
-      "dependencies": [
-        "async",
         "collection",
-        "meta"
-      ]
-    },
-    {
-      "name": "crypto",
-      "version": "3.0.7",
-      "dependencies": [
+        "source_span",
+        "string_scanner",
         "typed_data"
       ]
-    },
-    {
-      "name": "args",
-      "version": "2.7.0",
-      "dependencies": []
     },
     {
       "name": "string_scanner",
@@ -407,11 +442,6 @@
       "dependencies": [
         "web"
       ]
-    },
-    {
-      "name": "web",
-      "version": "1.1.1",
-      "dependencies": []
     },
     {
       "name": "vm_service",
@@ -459,16 +489,6 @@
       "dependencies": []
     },
     {
-      "name": "http_parser",
-      "version": "4.1.2",
-      "dependencies": [
-        "collection",
-        "source_span",
-        "string_scanner",
-        "typed_data"
-      ]
-    },
-    {
       "name": "convert",
       "version": "3.1.2",
       "dependencies": [
@@ -503,26 +523,6 @@
       "version": "92.0.0",
       "dependencies": [
         "meta"
-      ]
-    },
-    {
-      "name": "petitparser",
-      "version": "7.0.1",
-      "dependencies": [
-        "collection",
-        "meta"
-      ]
-    },
-    {
-      "name": "fixnum",
-      "version": "1.1.1",
-      "dependencies": []
-    },
-    {
-      "name": "quiver",
-      "version": "3.2.2",
-      "dependencies": [
-        "matcher"
       ]
     },
     {

@@ -34,7 +34,7 @@ void main() {
       final response = await harness.post('/');
 
       expect(response.statusCode, 201);
-      expect(response.headers['content-type'], 'application/json');
+      expect(response.headers['content-type'], contains('application/json'));
       expect(response.body, '{"success":true}');
     });
 
@@ -42,7 +42,7 @@ void main() {
       final response = await harness.get('/not_found');
 
       expect(response.statusCode, 404);
-      expect(response.headers['content-type'], 'application/json');
+      expect(response.headers['content-type'], contains('application/json'));
     });
     test('Reuses existing session cookie when provided', () async {
       final cookieHeader = '${Request.sessionCookieName}=existing-session';
@@ -117,7 +117,7 @@ void main() {
       final response = await harness.get('/error');
 
       expect(response.statusCode, 500);
-      expect(response.headers['content-type'], 'application/json');
+      expect(response.headers['content-type'], contains('application/json'));
     });
   });
 

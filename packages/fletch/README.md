@@ -7,6 +7,10 @@
 
 [![pub package](https://img.shields.io/pub/v/fletch.svg)](https://pub.dev/packages/fletch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/discord/1455638457639768285?color=5865F2&label=discord&logo=discord&logoColor=white)](https://discord.gg/rykqYF6Jvn)
+
+<!-- ROB_NOTICE_START -->
+<!-- ROB_NOTICE_END -->
 
 > **📦 Package History Notice**  
 > This package was previously a jQuery-like library by [Rob Kellett](https://github.com/RobKellett). As of version 2.0.0 (January 2025), it has been repurposed as an Express-inspired HTTP framework. If you're looking for the original jQuery-like library, please see [version 0.3.0](https://pub.dev/packages/fletch/versions/0.3.0) or the [original repository](https://github.com/RobKellett/Fletch). Thank you to Rob for graciously transferring the package name!
@@ -18,7 +22,8 @@ lightweight and dependency-free beyond `GetIt`.
 
 📚 **[Documentation](https://docs.fletch.mahawarkartikey.in/)** | 
 🐛 **[Issues](https://github.com/kartikey321/fletch/issues)** | 
-💬 **[Discussions](https://github.com/kartikey321/fletch/discussions)**
+💬 **[Discussions](https://github.com/kartikey321/fletch/discussions)** |
+🎮 **[Discord](https://discord.gg/rykqYF6Jvn)**
 
 ## Why Fletch?
 
@@ -215,6 +220,15 @@ app.setErrorHandler((error, req, res) async {
 ## Documentation
 
 Full documentation is available at **[docs.fletch.mahawarkartikey.in](https://docs.fletch.mahawarkartikey.in/)**.
+
+## Community
+
+Join the discussion! We have a dedicated Discord server for:
+- 🆘 **Help & Support** - Get answers to your Fletch questions
+- 💡 **Ideas & Feedback** - Help shape the future of the framework
+- 📢 **Announcements** - Be the first to know about new releases
+
+👉 **[Join our Discord Server](https://discord.gg/KcYqdtxK)**
 
 ## Contributing
 

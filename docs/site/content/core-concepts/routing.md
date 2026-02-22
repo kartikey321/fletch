@@ -27,6 +27,8 @@ app.delete('/users/:id', (req, res) {
 });
 ```
 
+> **Note**: Route methods (`get`, `post`, etc.) return `void`, so they cannot be chained.
+
 ## Path Parameters
 
 Capture dynamic segments from the URL:
@@ -47,80 +49,67 @@ Access via: `/users/123/posts/456`
 
 ## Query Parameters
 
-Access query string parameters:
+Access query string parameters using `req.query`:
 
 ```dart
 app.get('/search', (req, res) {
+  // /search?q=dart&page=2
   final query = req.query['q'];
   final page = int.tryParse(req.query['page'] ?? '1') ?? 1;
   
   res.json({
     'query': query,
     'page': page,
-    'results': [],
   });
 });
 ```
 
-Access via: `/search?q=dart&page=2`
-
 ## Wildcard Routes
 
-Match multiple path segments:
+Match multiple path segments using `*`:
 
 ```dart
 app.get('/files/*', (req, res) {
-  final filePath = req.params['*'];
-  res.text('File path: $filePath');
+  // Access the matched wildcard value via regular params or specialized logic
+  // Typically, wildcards match everything remaining in the path
+  res.text('Matched file request');
 });
 ```
 
-Access `/files/documents/report.pdf` → captures `documents/report.pdf`
-
-## Route Groups
-
-Organize routes with common prefixes:
-
-```dart
-// API v1 routes
-app.get('/api/v1/users', getUsersV1);
-app.get('/api/v1/posts', getPostsV1);
-
-// API v2 routes
-app.get('/api/v2/users', getUsersV2);
-app.get('/api/v2/posts', getPostsV2);
-```
-
-## Route Order
-
-Routes are matched in the order they're defined:
-
-```dart
-// Specific route first
-app.get('/users/me', (req, res) {
-  res.json({'user': 'current user'});
-});
-
-// Generic route second
-app.get('/users/:id', (req, res) {
-  res.json({'user': req.params['id']});
-});
-```
+Access `/files/documents/report.pdf` triggers this handler.
 
 ## Controllers
 
-Organize related routes in controllers:
+For larger applications, organize routes using the **Controller** class.
+
+1. Create a controller by extending `Controller`.
+2. Override `registerRoutes` to define endpoints.
+3. Mount it using `useController`.
 
 ```dart
-class UserController {
-  void getAll(Request req, Response res) {
-    res.json({'users': []});
+import 'package:fletch/fletch.dart';
+
+class UserController extends Controller {
+  @override
+  void registerRoutes(ControllerOptions options) {
+    // GET /users/
+    options.get('/', getAll);
+    
+    // GET /users/:id
+    options.get('/:id', getById);
+    
+    // POST /users/
+    options.post('/', create);
   }
-  
+
+  void getAll(Request req, Response res) {
+    res.json(['user1', 'user2']);
+  }
+
   void getById(Request req, Response res) {
     res.json({'id': req.params['id']});
   }
-  
+
   Future<void> create(Request req, Response res) async {
     final body = await req.body;
     res.status(201).json(body);
@@ -129,29 +118,39 @@ class UserController {
 
 void main() {
   final app = Fletch();
-  final users = UserController();
   
-  app.get('/users', users.getAll);
-  app.get('/users/:id', users.getById);
-  app.post('/users', users.create);
+  // Mounts all controller routes under /users
+  app.useController('/users', UserController());
+  
+  app.listen(3000);
 }
 ```
 
-## Method Chaining
+This pattern keeps your `main()` function clean and your route logic modular.
 
-Chain multiple route handlers:
+## Route Groups
+
+You can also group routes using `base_container` organization or by simply mounting `IsolatedContainer`s for larger features.
+
+See [Isolated Containers](/advanced/isolated-containers) for advanced grouping.
+
+## Route Order
+
+Routes are matched based on the radix tree structure. Specific static paths generally take precedence, but parameterized routes are matched when no static path exists.
 
 ```dart
-app
-  .get('/users', getAllUsers)
-  .post('/users', createUser)
-  .put('/users/:id', updateUser)
-  .delete('/users/:id', deleteUser);
+// Static path
+app.get('/users/me', (req, res) { ... });
+
+// Parameterized path
+app.get('/users/:id', (req, res) { ... });
 ```
+
+Requesting `/users/me` will match the first handler. Requesting `/users/123` will match the second.
 
 ## All Methods
 
-Handle any HTTP method:
+Handle any HTTP method for a path:
 
 ```dart
 app.all('/api/*', (req, res, next) async {
@@ -159,22 +158,6 @@ app.all('/api/*', (req, res, next) async {
   await next();
 });
 ```
-
-## Regular Expressions
-
-For complex patterns, routes use glob syntax internally:
-
-```dart
-app.get('/users/:id', handler);        // :id matches any segment
-app.get('/files/*', handler);          // * matches multiple segments
-```
-
-## Performance
-
-The radix tree router provides:
-- **O(log n) lookup time**
-- **Efficient matching** even with thousands of routes
-- **Zero allocations** for route matching
 
 <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;margin:2rem 0;">
   <a href="/getting-started/quick-start" style="display:flex;align-items:center;gap:0.4rem;text-decoration:none;color:inherit;">

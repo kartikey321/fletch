@@ -14,9 +14,16 @@ class RequestTypes {
   static const String DELETE = 'DELETE';
   static const String OPTIONS = 'OPTIONS';
   static const String HEAD = 'HEAD';
-  static const List<String> allTypes = [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS];
+  static const List<String> allTypes = [
+    GET,
+    POST,
+    PUT,
+    PATCH,
+    DELETE,
+    HEAD,
+    OPTIONS
+  ];
 }
-
 
 /// A production-ready web framework for Dart inspired by Express.js.
 ///
@@ -164,25 +171,24 @@ class Fletch extends BaseContainer {
     }
   }
 
-  /// Mounts a [Controller] at the specified [prefix] path.
+  /// Mounts an [IsolatedContainer] at the specified [prefix] path.
   ///
-  /// All routes registered in the controller will be prefixed with [prefix].
+  /// This is a convenience method that mounts an isolated container to the
+  /// main application at the specified prefix.
   ///
   /// ## Example
   ///
   /// ```dart
-  /// class UserController extends Controller {
-  ///   @override
-  ///   void registerRoutes(ControllerOptions options) {
-  ///     options.get('/list', listUsers); // -> GET /users/list
-  ///     options.post('/create', createUser); // -> POST /users/create
-  ///   }
-  /// }
+  /// final authModule = IsolatedContainer();
+  /// authModule.get('/login', loginHandler);
+  /// authModule.post('/register', registerHandler);
   ///
-  /// app.useController('/users', UserController());
+  /// app.mount('/auth', authModule);
   /// ```
-  void useController(String prefix, Controller controller) {
-    controller.initialize(this, prefix: prefix);
+  ///
+  /// The container will be automatically configured with the correct prefix.
+  void mount(String prefix, IsolatedContainer container) {
+    container.withPrefix(prefix).mount(this);
   }
 
   /// Registers a GET route handler at [path].
@@ -202,7 +208,6 @@ class Fletch extends BaseContainer {
   /// ```
 // HTTP method handlers (get, post, put, patch, delete, head, options)
 // are inherited from BaseContainer
-
 
   final Map<HttpServer, Future<void>> _serverLifecycles = {};
 

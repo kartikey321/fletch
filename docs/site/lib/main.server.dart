@@ -7,10 +7,10 @@ library;
 import 'dart:io';
 
 // Server-specific Jaspr import.
+import 'package:jaspr/dom.dart';
 import 'package:jaspr/server.dart';
 
 import 'package:jaspr_content/components/callout.dart';
-import 'package:jaspr_content/components/github_button.dart';
 import 'package:jaspr_content/components/header.dart';
 import 'package:jaspr_content/components/image.dart';
 import 'package:jaspr_content/components/sidebar.dart';
@@ -20,6 +20,7 @@ import 'package:jaspr_content/theme.dart';
 
 import 'components/toc_highlighter.dart';
 import 'components/safe_code_block.dart';
+import 'components/github_button.dart';
 import 'layouts/docs_layout_with_toc_highlighter.dart';
 
 // This file is generated automatically by Jaspr, do not remove or edit.
@@ -72,10 +73,35 @@ void main() {
             title: 'Fletch',
             logo: '/images/logo.svg',
             items: [
+              // Responsive style to hide Discord on mobile to prevent overlap
+
+              // Discord Community
+              a(
+                href: 'hhttps://discord.gg/rykqYF6Jvn',
+                target: Target.blank,
+                classes: 'discord-nav-item',
+                attributes: {
+                  'style':
+                      'display: flex !important; align-items: center; margin-right: 16px; flex-shrink: 0; min-width: 24px;',
+                },
+                [
+                  img(
+                    src: '/images/discord_logo.svg',
+                    width: 24,
+                    height: 24,
+                    attributes: {
+                      'alt': 'Discord',
+                      'style':
+                          'object-fit: contain !important; width: 24px; height: 24px; min-width: 24px; min-height: 24px;',
+                    },
+                  ),
+                ],
+              ),
               // Enables switching between light and dark mode.
               ThemeToggle(),
+
               // Shows github stats.
-              GitHubButton(repo: 'kartikey321/fletch'),
+              MyGitHubButton(repo: 'kartikey321/fletch'),
             ],
           ),
           sidebar: Sidebar(

@@ -124,19 +124,60 @@ app.post('/signup', validateUser, (req, res) async {
 });
 ```
 
-### Error Handling
+### Error Handler Signature
+
+Custom error handlers must match this signature:
 
 ```dart
-app.use((req, res, next) async {
-  try {
-    await next();
-  } catch (e, stack) {
-    print('Error: $e');
-    print(stack);
-    res.status(500).json({
-      'error': 'Internal server error',
-      'message': e.toString(),
+typedef ErrorHandler = FutureOr<void> Function(
+    dynamic error, Request request, Response response);
+```
+
+### The HttpError Class
+
+Fletch provides a built-in `HttpError` class for standard HTTP exceptions. Throwing these will automatically result in the correct status code and JSON response.
+
+**Available Errors:**
+
+- `HttpError(statusCode, message, [data])`: Generic error.
+- `ValidationError(message, [data])`: 400 Bad Request.
+- `UnauthorizedError(message, [data])`: 401 Unauthorized.
+- `NotFoundError(message, [data])`: 404 Not Found.
+- `RouteConflictError(message, [data])`: 409 Conflict.
+
+**Example:**
+
+```dart
+app.get('/user/:id', (req, res) {
+  final user = findUser(req.params['id']);
+  
+  if (user == null) {
+    throw NotFoundError('User not found');
+  }
+  
+  if (!user.isActive) {
+    throw UnauthorizedError('Account disabled');
+  }
+  
+  res.json(user);
+});
+```
+
+### Custom Error Handler
+
+Install a global error handler to customize responses:
+
+```dart
+app.setErrorHandler((error, req, res) async {
+  if (error is HttpError) {
+    res.status(error.statusCode).json({
+      'error': error.message,
+      'details': error.data
     });
+  } else {
+    // Log unexpected errors
+    print('Unexpected error: $error');
+    res.status(500).json({'error': 'Internal Server Error'});
   }
 });
 ```

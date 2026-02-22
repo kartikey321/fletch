@@ -13,7 +13,7 @@ Add fletch to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  fletch: ^1.0.0
+  fletch: ^2.0.3
 ```
 
 Then install dependencies:

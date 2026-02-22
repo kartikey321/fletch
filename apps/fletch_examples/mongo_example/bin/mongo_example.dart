@@ -10,7 +10,6 @@ void main(List<String> arguments) async {
   app.setErrorHandler((err, req, res) async {
     print(err);
   });
-  
 
   app.get('/users', (req, res) async {
     String projectPath = Directory.current.path;
@@ -50,7 +49,7 @@ class MongoController extends Controller {
   }
 
   @override
-  void initialize(Fletch app, {String prefix = ''}) {
+  void initialize(BaseContainer app, {required String prefix}) {
     // TODO: implement initialize
     super.initialize(app, prefix: prefix);
   }

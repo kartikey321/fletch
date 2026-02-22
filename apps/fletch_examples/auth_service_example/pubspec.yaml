@@ -1,0 +1,17 @@
+name: auth_service_example
+description: A production-ready example of a modular Auth Service using Fletch IsolatedContainers.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  fletch:
+    path: ../../../packages/fletch
+  crypto: ^3.0.3
+  uuid: ^4.0.0
+
+dev_dependencies:
+  lints: ^2.0.0
+  test: ^1.24.0

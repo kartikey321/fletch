@@ -1,394 +1,131 @@
 # Error Handling
 
-Handle errors gracefully and provide meaningful feedback to clients.
+Fletch provides a robust error handling system that simplifies returning standard HTTP error responses and supports custom global error handling.
 
-## Basic Error Handling
+## The HttpError Class
 
-### Try-Catch in Routes
+The core of Fletch's error handling is the `HttpError` class. When you throw an `HttpError` (or a subclass) from any route or middleware, Fletch automatically catches it and sends a structured JSON response with the appropriate status code.
 
-```dart
-app.get('/user/:id', (req, res) async {
-  try {
-    final userId = req.params['id']!;
-    final user = await database.getUser(userId);
-    
-    if (user == null) {
-      return res.status(404).json({'error': 'User not found'});
-    }
-    
-    res.json(user);
-  } catch (e) {
-    res.status(500).json({
-      'error': 'Internal server error',
-      'message': e.toString(),
-    });
-  }
-});
-```
+### Built-in Error Types
 
-## Global Error Handler
+Fletch includes several pre-defined error classes for common scenarios:
 
-Catch all unhandled errors:
+- **`HttpError(statusCode, message, [data])`**: Generic error.
+- **`ValidationError(message, [data])`**: 400 Bad Request.
+- **`UnauthorizedError(message, [data])`**: 401 Unauthorized.
+- **`NotFoundError(message, [data])`**: 404 Not Found.
+- **`RouteConflictError(message, [data])`**: 409 Conflict.
+
+### Usage Example
+
+Throwing errors in your routes allows execution to stop immediately and lets the framework handle the response.
 
 ```dart
-void main() async {
-  final app = Fletch();
-  
-  // Your routes
-  app.get('/', myHandler);
-  
-  // Global error handler (must be last)
-  app.use((req, res, next) async {
-    try {
-      await next();
-    } catch (e, stackTrace) {
-      print('Error: $e');
-      print(stackTrace);
-      
-      res.status(500).json({
-        'error': 'Internal server error',
-        'message': e.toString(),
-      });
-    }
-  });
-  
-  await app.listen(3000);
-}
-```
-
-## Custom Error Classes
-
-Create typed errors:
-
-```dart
-class AppError implements Exception {
-  final int statusCode;
-  final String message;
-  final Map<String, dynamic>? details;
-  
-  AppError(this.message, {this.statusCode = 500, this.details});
-  
-  @override
-  String toString() => message;
-}
-
-class NotFoundError extends AppError {
-  NotFoundError(String message) : super(message, statusCode: 404);
-}
-
-class ValidationError extends AppError {
-  ValidationError(String message, Map<String, dynamic> details)
-      : super(message, statusCode: 400, details: details);
-}
-
-class UnauthorizedError extends AppError {
-  UnauthorizedError(String message) : super(message, statusCode: 401);
-}
-```
-
-### Using Custom Errors
-
-```dart
-app.get('/user/:id', (req, res) async {
-  final user = await database.getUser(req.params['id']!);
+app.get('/users/:id', (req, res) {
+  final user = findUser(req.params['id']);
   
   if (user == null) {
     throw NotFoundError('User not found');
   }
   
+  if (!user.isActive) {
+    throw UnauthorizedError('Account disabled');
+  }
+  
   res.json(user);
 });
+```
 
-// Error handler
-app.use((req, res, next) async {
-  try {
-    await next();
-  } catch (e) {
-    if (e is AppError) {
-      return res.status(e.statusCode).json({
-        'error': e.message,
-        if (e.details != null) 'details': e.details,
+The client will receive a 404 response body like:
+
+```json
+{
+  "error": "User not found",
+  "data": null
+}
+```
+
+## Global Error Handler
+
+You can define a custom global error handler to control the exact format of your error responses or to integrate with logging services (like Sentry or Datadog).
+
+### Handler Signature
+
+```dart
+typedef ErrorHandler = FutureOr<void> Function(
+    dynamic error, Request request, Response response);
+```
+
+### Configuration
+
+Pass your custom handler to `app.setErrorHandler()`:
+
+```dart
+void main() {
+  final app = Fletch();
+
+  app.setErrorHandler((error, req, res) async {
+    // 1. Log the error
+    print('Error: $error');
+
+    // 2. Handle known HttpErrors
+    if (error is HttpError) {
+      res.status(error.statusCode).json({
+        'success': false,
+        'error': {
+          'code': error.statusCode,
+          'message': error.message,
+          'details': error.data,
+        }
       });
+      return;
     }
-    
-    // Unknown error
-    res.status(500).json({'error': 'Internal server error'});
-  }
-});
+
+    // 3. Handle unexpected errors (hide details in production)
+    res.status(500).json({
+      'success': false,
+      'error': {
+        'code': 500,
+        'message': 'Internal Server Error',
+      }
+    });
+  });
+
+  app.listen(3000);
+}
 ```
 
 ## Validation Errors
 
-Handle invalid input:
+The `ValidationError` class is perfect for returning detailed form validation issues.
 
 ```dart
-app.post('/user', (req, res) async {
+app.post('/register', (req, res) async {
   final body = await req.body;
-  final errors = <String, String>{};
   
-  if (body['email'] == null || !isValidEmail(body['email'])) {
-    errors['email'] = 'Valid email required';
-  }
-  
-  if (body['password'] == null || body['password'].length < 8) {
-    errors['password'] = 'Password must be at least 8 characters';
-  }
-  
-  if (errors.isNotEmpty) {
-    throw ValidationError('Validation failed', errors);
-  }
-  
-  // Process request...
-});
-```
-
-## Async Error Handling
-
-Properly handle async errors:
-
-```dart
-app.get('/data', (req, res) async {
-  try {
-    final data = await fetchFromAPI();
-    res.json(data);
-  } on TimeoutException {
-    res.status(504).json({'error': 'Gateway timeout'});
-  } on SocketException {
-    res.status(503).json({'error': 'Service unavailable'});
-  } catch (e) {
-    res.status(500).json({'error': 'Internal server error'});
+  if (body['email'] == null) {
+    throw ValidationError('Invalid input', {'email': 'Email is required'});
   }
 });
 ```
 
-## Error Response Format
-
-### Development vs Production
-
-```dart
-app.use((req, res, next) async {
-  try {
-    await next();
-  } catch (e, stackTrace) {
-    final isDev = Platform.environment['ENV'] != 'production';
-    
-    res.status(500).json({
-      'error': 'Internal server error',
-      if (isDev) 'message': e.toString(),
-      if (isDev) 'stack': stackTrace.toString(),
-    });
+Response (400 Bad Request):
+```json
+{
+  "error": "Invalid input",
+  "data": {
+    "email": "Email is required"
   }
-});
-```
-
-### Structured Errors
-
-```dart
-class ErrorResponse {
-  final String error;
-  final int statusCode;
-  final String? message;
-  final Map<String, dynamic>? details;
-  final String timestamp;
-  
-  ErrorResponse({
-    required this.error,
-    required this.statusCode,
-    this.message,
-    this.details,
-  }) : timestamp = DateTime.now().toIso8601String();
-  
-  Map<String, dynamic> toJson() => {
-    'error': error,
-    'statusCode': statusCode,
-    if (message != null) 'message': message,
-    if (details != null) 'details': details,
-    'timestamp': timestamp,
-  };
-}
-
-// Usage
-res.status(400).json(ErrorResponse(
-  error: 'Bad Request',
-  statusCode: 400,
-  message: 'Invalid email format',
-  details: {'field': 'email'},
-).toJson());
-```
-
-## HTTP Status Codes
-
-Use appropriate status codes:
-
-```dart
-// 400 - Bad Request
-res.status(400).json({'error': 'Invalid input'});
-
-// 401 - Unauthorized  
-res.status(401).json({'error': 'Authentication required'});
-
-// 403 - Forbidden
-res.status(403).json({'error': 'Access denied'});
-
-// 404 - Not Found
-res.status(404).json({'error': 'Resource not found'});
-
-// 409 - Conflict
-res.status(409).json({'error': 'Email already exists'});
-
-// 422 - Unprocessable Entity
-res.status(422).json({'error': 'Validation failed', 'details': errors});
-
-// 500 - Internal Server Error
-res.status(500).json({'error': 'Internal server error'});
-
-// 503 - Service Unavailable
-res.status(503).json({'error': 'Service temporarily unavailable'});
-```
-
-## Database Errors
-
-Handle database-specific errors:
-
-```dart
-app.post('/user', (req, res) async {
-  try {
-    final user = await database.createUser(data);
-    res.status(201).json(user);
-  } on DuplicateKeyException {
-    res.status(409).json({'error': 'Email already exists'});
-  } on DatabaseException catch (e) {
-    print('Database error: $e');
-    res.status(500).json({'error': 'Database error'});
-  }
-});
-```
-
-## Logging Errors
-
-Log errors for debugging:
-
-```dart
-import 'package:logging/logging.dart';
-
-final logger = Logger('MyApp');
-
-app.use((req, res, next) async {
-  try {
-    await next();
-  } catch (e, stackTrace) {
-    logger.severe('Error processing request', e, stackTrace);
-    
-    res.status(500).json({
-      'error': 'Internal server error',
-      'requestId': generateRequestId(),
-    });
-  }
-});
-```
-
-## Error Monitoring
-
-Integrate with error tracking services:
-
-```dart
-app.use((req, res, next) async {
-  try {
-    await next();
-  } catch (e, stackTrace) {
-    // Send to Sentry, Bugsnag, etc.
-    await errorTracker.captureException(e, stackTrace: stackTrace);
-    
-    res.status(500).json({'error': 'Internal server error'});
-  }
-});
-```
-
-## Rate Limit Errors
-
-Handle rate limiting:
-
-```dart
-app.use(app.rateLimit(
-  maxRequests: 100,
-  windowMs: 60000,
-  handler: (req, res) {
-    res.status(429).json({
-      'error': 'Too many requests',
-      'retryAfter': 60,
-    });
-  },
-));
-```
-
-## 404 Not Found
-
-Handle routes that don't exist:
-
-```dart
-void main() async {
-  final app = Fletch();
-  
-  // Your routes
-  app.get('/users', getUserHandler);
-  app.post('/users', createUserHandler);
-  
-  // 404 handler (must be after all routes)
-  app.use((req, res, next) async {
-    res.status(404).json({
-      'error': 'Not Found',
-      'path': req.uri.path,
-    });
-  });
-  
-  await app.listen(3000);
-}
-```
-
-## Best Practices
-
-1. **Always use try-catch** for async operations
-2. **Return appropriate status codes**
-3. **Don't expose stack traces** in production
-4. **Log errors** for debugging
-5. **Use typed errors** for better error handling
-6. **Test error scenarios**
-7. **Document error responses** in API docs
-
-## Testing Errors
-
-```dart
-import 'package:test/test.dart';
-import 'package:http/http.dart' as http;
-
-void main() {
-  test('returns 404 for invalid route', () async {
-    final response = await http.get(
-      Uri.parse('http://localhost:3000/invalid'),
-    );
-    
-    expect(response.statusCode, 404);
-    expect(jsonDecode(response.body)['error'], 'Not Found');
-  });
-  
-  test('returns 400 for invalid input', () async {
-    final response = await http.post(
-      Uri.parse('http://localhost:3000/user'),
-      body: {'email': 'invalid'},
-    );
-    
-    expect(response.statusCode, 400);
-  });
 }
 ```
 
 <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;margin:2rem 0;">
-  <a href="/core-concepts/sessions" style="display:flex;align-items:center;gap:0.4rem;text-decoration:none;color:inherit;">
+  <a href="/core-concepts/middleware" style="display:flex;align-items:center;gap:0.4rem;text-decoration:none;color:inherit;">
     <span aria-hidden="true">‹</span>
-    <span>🔐 Sessions</span>
+    <span>🧩 Middleware</span>
   </a>
-  <a href="/deployment/docker" style="display:flex;align-items:center;gap:0.4rem;text-decoration:none;color:inherit;">
-    <span>🐳 Docker</span>
+  <a href="/core-concepts/sessions" style="display:flex;align-items:center;gap:0.4rem;text-decoration:none;color:inherit;">
+    <span>🔐 Sessions</span>
     <span aria-hidden="true">›</span>
   </a>
 </div>

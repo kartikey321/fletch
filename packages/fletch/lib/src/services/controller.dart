@@ -1,14 +1,15 @@
 import 'package:meta/meta.dart';
 
 import '../models/middleware.dart';
-import 'fletch.dart';
+import 'base_container.dart';
 
 /// Helper passed to controllers so they can register routes relative to their
 /// configured prefix without duplicating boilerplate.
 class ControllerOptions {
-  late final Fletch _app;
+  late final BaseContainer _app;
   late final String _prefix;
   ControllerOptions(this._app, this._prefix);
+
   /// Registers a `GET` handler relative to the controller prefix.
   void get(String path, RequestHandler handler,
       {List<MiddlewareHandler>? middleware}) {
@@ -56,7 +57,7 @@ class ControllerOptions {
 abstract class Controller {
   late final ControllerOptions _options;
   @mustCallSuper
-  void initialize(Fletch app, {required String prefix}) {
+  void initialize(BaseContainer app, {required String prefix}) {
     _options = ControllerOptions(app, prefix);
     registerRoutes(_options);
   }

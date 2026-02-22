@@ -151,36 +151,38 @@ class Response {
   /// res.json({'success': true, 'data': users});
   /// res.json({'error': 'Not found'}, statusCode: 404);
   /// ```
-  void json(Map<String, dynamic> data, {int? statusCode}) {
+  void json(Map<String, dynamic> data,
+      {int? statusCode, Encoding encoding = utf8}) {
+    // JSON must be encoded to string first
     body = jsonEncode(data);
-    headers['Content-Type'] = ContentType.json.mimeType;
+    headers['Content-Type'] = 'application/json; charset=${encoding.name}';
     if (statusCode != null) {
       setStatus(statusCode);
     }
   }
 
   /// Writes a plain text payload to the response.
-  void text(String data, {int? statusCode}) {
+  void text(String data, {int? statusCode, Encoding encoding = utf8}) {
     body = data;
-    headers['Content-Type'] = ContentType.text.mimeType;
+    headers['Content-Type'] = 'text/plain; charset=${encoding.name}';
     if (statusCode != null) {
       setStatus(statusCode);
     }
   }
 
   /// Writes an HTML payload to the response.
-  void html(String html, {int? statusCode}) {
+  void html(String html, {int? statusCode, Encoding encoding = utf8}) {
     body = html;
-    headers['Content-Type'] = ContentType.html.mimeType;
+    headers['Content-Type'] = 'text/html; charset=${encoding.name}';
     if (statusCode != null) {
       setStatus(statusCode);
     }
   }
 
   /// Writes an XML payload to the response.
-  void xml(String xml, {int? statusCode}) {
+  void xml(String xml, {int? statusCode, Encoding encoding = utf8}) {
     body = xml;
-    headers['Content-Type'] = 'application/xml';
+    headers['Content-Type'] = 'application/xml; charset=${encoding.name}';
     if (statusCode != null) {
       setStatus(statusCode);
     }

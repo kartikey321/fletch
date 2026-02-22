@@ -6,6 +6,7 @@ import 'package:meta/meta.dart';
 import 'package:logger/logger.dart';
 
 import '../router/router_interface.dart';
+import 'controller.dart';
 
 /// Core runtime wiring shared by [Fletch] and other container variants.
 /// Provides middleware composition, dependency registration helpers, and
@@ -37,6 +38,27 @@ abstract class BaseContainer {
   /// Adds a global [middleware] to the container.
   void use(MiddlewareHandler middleware) {
     _middleware.add(middleware);
+  }
+
+  /// Mounts a [Controller] at the specified [prefix] path.
+  ///
+  /// All routes registered in the controller will be prefixed with [prefix].
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// class UserController extends Controller {
+  ///   @override
+  ///   void registerRoutes(ControllerOptions options) {
+  ///     options.get('/list', listUsers); // -> GET /users/list
+  ///     options.post('/create', createUser); // -> POST /users/create
+  ///   }
+  /// }
+  ///
+  /// app.useController('/users', UserController());
+  /// ```
+  void useController(String prefix, Controller controller) {
+    controller.initialize(this, prefix: prefix);
   }
 
   /// Registers a pre-built [instance] that will be served for type [T].

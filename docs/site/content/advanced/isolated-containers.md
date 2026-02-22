@@ -127,7 +127,7 @@ void main() async {
   final tenantA = IsolatedContainer(prefix: '/tenant-a');
   tenantA.container.registerSingleton(DatabaseA());
   tenantA.get('/data', (req, res) {
-    final db = req.container<DatabaseA>();
+    final db = req.container.get<DatabaseA>();
     res.json(db.query());
   });
   tenantA.mount(app);
@@ -136,7 +136,7 @@ void main() async {
   final tenantB = IsolatedContainer(prefix: '/tenant-b');
   tenantB.container.registerSingleton(DatabaseB());
   tenantB.get('/data', (req, res) {
-    final db = req.container<DatabaseB>();
+    final db = req.container.get<DatabaseB>();
     res.json(db.query());
   });
   tenantB.mount(app);

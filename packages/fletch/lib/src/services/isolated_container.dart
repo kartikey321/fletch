@@ -48,6 +48,31 @@ class IsolatedContainer extends BaseContainer {
     );
   }
 
+  /// Creates a copy of this container with a new prefix.
+  ///
+  /// This is useful when you want to mount the same container at different
+  /// paths or when using the `app.mount()` convenience method.
+  ///
+  /// Note: This creates a shallow copy - the router and DI container are
+  /// shared, so all routes and dependencies are the same.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// final authModule = IsolatedContainer();
+  /// authModule.get('/login', loginHandler);
+  ///
+  /// // Mount at different prefix
+  /// app.mount('/auth', authModule.withPrefix('/auth'));
+  /// ```
+  IsolatedContainer withPrefix(String newPrefix) {
+    return IsolatedContainer(
+      prefix: newPrefix,
+      router: router,
+      container: container,
+    );
+  }
+
   /// Optional helper to run this container as a standalone service.
   Future<void> listen(int port, {InternetAddress? address}) async {
     address ??= InternetAddress.anyIPv4;

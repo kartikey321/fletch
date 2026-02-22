@@ -1,0 +1,48 @@
+name: Deploy Docs to Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/site/**'
+      - '.github/workflows/deploy_docs.yml'
+
+jobs:
+  deploy_docs:
+    runs-on: ubuntu-latest
+    name: Build & Deploy
+    permissions:
+      contents: read
+      deployments: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install Jaspr CLI
+        run: dart pub global activate jaspr_cli
+
+      - name: Install Dependencies
+        working-directory: docs/site
+        run: dart pub get
+
+      - name: Build Site
+        working-directory: docs/site
+        run: jaspr build --verbose
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # The project name on Cloudflare Pages.
+          # You might need to change this if your project is named differently.
+          projectName: dart-express
+          directory: docs/site/build/jaspr
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
