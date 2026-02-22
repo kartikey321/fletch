@@ -2,7 +2,7 @@ name: fletch
 description: >-
   A fast, Express-inspired HTTP framework for Dart. Build production-ready REST APIs 
   with built-in sessions, CORS, rate limiting, and middleware support.
-version: 2.0.5
+version: 2.0.6
 repository: https://github.com/kartikey321/fletch
 homepage: https://docs.fletch.mahawarkartikey.in
 documentation: https://docs.fletch.mahawarkartikey.in

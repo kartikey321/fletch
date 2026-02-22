@@ -1,2 +1,0 @@
-> **📦 Package History Notice**  
-> This package was previously a jQuery-like library by [Rob Kellett](https://github.com/RobKellett). As of version 2.0.0 (January 2025), it has been repurposed as an Express-inspired HTTP framework. If you're looking for the original jQuery-like library, please see [version 0.3.0](https://pub.dev/packages/fletch/versions/0.3.0) or the [original repository](https://github.com/RobKellett/Fletch). Thank you to Rob for graciously transferring the package name!

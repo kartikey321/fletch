@@ -5,6 +5,13 @@ All notable changes to fletch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.6] - 2026-02-22
+
+### Fixed
+- **Publishing & Repository**
+  - Removed internal development tools from the published package.
+  - Fixed a duplicate package history notice in the `README.md` and removed the `switch_readme.sh` pub.dev injection script.
+
 ## [2.0.5] - 2026-02-22
 
 ### Changed

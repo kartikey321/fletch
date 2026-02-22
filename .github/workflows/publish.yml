@@ -18,10 +18,6 @@ jobs:
         working-directory: packages/fletch
         run: dart pub get
 
-      - name: Inject Rob's Notice
-        working-directory: packages/fletch
-        run: ./tool/switch_readme.sh --pubdev
-
       - name: Publish Package
         working-directory: packages/fletch
         run: ./tool/publish.sh --yes
