@@ -146,7 +146,7 @@ packages:
     source: hosted
     version: "4.1.2"
   io:
-    dependency: "direct dev"
+    dependency: transitive
     description:
       name: io
       sha256: dfd5a80599cf0165756e3181807ed3e77daf6dd4137caaad72d0b7931597650b

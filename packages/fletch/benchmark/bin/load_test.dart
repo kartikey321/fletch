@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 /// Simple load testing tool for fletch applications
 ///
 /// Usage:
-///   dart run bin/load_test.dart <url> [requests] [concurrency]
+///   dart run bin/load_test.dart url [requests] [concurrency]
 ///
 /// Example:
 ///   dart run bin/load_test.dart http://localhost:3000 1000 10

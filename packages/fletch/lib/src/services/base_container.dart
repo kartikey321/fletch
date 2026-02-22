@@ -6,7 +6,6 @@ import 'package:meta/meta.dart';
 import 'package:logger/logger.dart';
 
 import '../router/router_interface.dart';
-import 'controller.dart';
 
 /// Core runtime wiring shared by [Fletch] and other container variants.
 /// Provides middleware composition, dependency registration helpers, and

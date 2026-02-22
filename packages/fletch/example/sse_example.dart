@@ -148,7 +148,7 @@ Future<void> main() async {
       
       eventSource.addEventListener('update', (e) => {
         const data = JSON.parse(e.data);
-        addEvent(\`Update: \${data.value} at \${data.timestamp}\`, 'update');
+        addEvent(`Update: \${data.value} at \${data.timestamp}`, 'update');
       });
       
       eventSource.onerror = () => {
