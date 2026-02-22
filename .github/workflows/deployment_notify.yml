@@ -2,12 +2,10 @@ name: Notify Discord on deployments
 
 on:
   deployment_status:
-    types: [success]
 
 jobs:
   notify-discord:
     name: Notify Discord
-    if: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL != '' }}
     runs-on: ubuntu-latest
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_DEPLOY_WEBHOOK_URL }}
