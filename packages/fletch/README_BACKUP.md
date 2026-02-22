@@ -16,7 +16,7 @@ lightweight and dependency-free beyond `GetIt`.
 📚 **[Documentation](https://docs.fletch.mahawarkartikey.in/)** | 
 🐛 **[Issues](https://github.com/kartikey321/fletch/issues)** | 
 💬 **[Discussions](https://github.com/kartikey321/fletch/discussions)** |
-🎮 **[Discord](https://discord.gg/KcYqdtxK)**
+🎮 **[Discord](https://discord.gg/rykqYF6Jvn)**
 
 ## Why Fletch?
 

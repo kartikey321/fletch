@@ -34,6 +34,7 @@ dependencies:
 dev_dependencies:
   lints: ^6.0.0
   test: ^1.24.0
+  io: ^1.0.4
 
 # Example files for pub.dev
 screenshots:

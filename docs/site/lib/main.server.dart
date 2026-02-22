@@ -77,7 +77,7 @@ void main() {
 
               // Discord Community
               a(
-                href: 'https://discord.gg/KcYqdtxK',
+                href: 'hhttps://discord.gg/rykqYF6Jvn',
                 target: Target.blank,
                 classes: 'discord-nav-item',
                 attributes: {
