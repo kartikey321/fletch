@@ -232,16 +232,68 @@ class Fletch extends BaseContainer {
     int port, {
     InternetAddress? address,
     bool shared = false,
+    int backlog = 0,
+    bool v6Only = false,
   }) async {
     address ??= InternetAddress.anyIPv4;
-    final server = await HttpServer.bind(address, port, shared: shared);
+    final server = await HttpServer.bind(
+      address, port,
+      shared: shared,
+      backlog: backlog,
+      v6Only: v6Only,
+    );
     logger.i('Server listening on port ${server.port}');
+    return _attachServer(server);
+  }
 
+  /// Binds an [HttpServer] over TLS on [port] using [context].
+  ///
+  /// ```dart
+  /// final ctx = SecurityContext()
+  ///   ..useCertificateChain('cert.pem')
+  ///   ..usePrivateKey('key.pem');
+  /// await app.listenSecure(443, ctx);
+  /// ```
+  Future<HttpServer> listenSecure(
+    int port,
+    SecurityContext context, {
+    InternetAddress? address,
+    bool shared = false,
+    int backlog = 0,
+    bool v6Only = false,
+    bool requestClientCertificate = false,
+  }) async {
+    address ??= InternetAddress.anyIPv4;
+    final server = await HttpServer.bindSecure(
+      address, port, context,
+      shared: shared,
+      backlog: backlog,
+      v6Only: v6Only,
+      requestClientCertificate: requestClientCertificate,
+    );
+    logger.i('Server listening securely on port ${server.port}');
+    return _attachServer(server);
+  }
+
+  /// Attaches Fletch to a pre-configured [server] and starts processing requests.
+  ///
+  /// Use this for full control — Unix sockets, custom TLS, or tests that
+  /// create and tear down a server externally.
+  ///
+  /// ```dart
+  /// final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 8080);
+  /// await app.serveWith(server);
+  /// ```
+  Future<HttpServer> serveWith(HttpServer server) {
+    logger.i('Serving on pre-configured server at port ${server.port}');
+    return _attachServer(server);
+  }
+
+  Future<HttpServer> _attachServer(HttpServer server) {
     final lifecycle = _serve(server);
     _serverLifecycles[server] = lifecycle;
     lifecycle.whenComplete(() => _serverLifecycles.remove(server));
-
-    return server;
+    return Future.value(server);
   }
 
   /// Awaits the internal request-processing loop for [server], ensuring any

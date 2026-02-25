@@ -74,9 +74,20 @@ class IsolatedContainer extends BaseContainer {
   }
 
   /// Optional helper to run this container as a standalone service.
-  Future<void> listen(int port, {InternetAddress? address}) async {
+  Future<void> listen(
+    int port, {
+    InternetAddress? address,
+    bool shared = false,
+    int backlog = 0,
+    bool v6Only = false,
+  }) async {
     address ??= InternetAddress.anyIPv4;
-    final server = await HttpServer.bind(address, port);
+    final server = await HttpServer.bind(
+      address, port,
+      shared: shared,
+      backlog: backlog,
+      v6Only: v6Only,
+    );
     logger.i('Isolated container listening on port ${server.port}');
     await for (final httpRequest in server) {
       await handleRequest(httpRequest);
