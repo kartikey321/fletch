@@ -41,73 +41,60 @@ jobs:
         working-directory: packages/fletch
         run: ./tool/publish.sh --yes
 
+  notify:
+    name: Discord Notification
+    needs: [test, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
       - name: Send Discord Notification
-        if: always()
         env:
-          # Falls back to DISCORD_DEPLOY_WEBHOOK_URL if the publish-specific one isn't set
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_PUBLISH_WEBHOOK_URL || secrets.DISCORD_DEPLOY_WEBHOOK_URL }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
-          JOB_STATUS: ${{ job.status }}
         run: |
           python - <<'PY'
-          import json, os, sys, urllib.request
+          import json, os, urllib.request
 
-          webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-          if not webhook:
-              print("No Discord webhook configured, skipping notification")
-              sys.exit(0)
+          token = os.environ.get("DISCORD_TOKEN", "").strip()
+          if not token:
+              print("DISCORD_TOKEN not configured, skipping")
+              exit(0)
 
           tag     = os.environ["TAG"]
           repo    = os.environ["REPO"]
           actor   = os.environ["ACTOR"]
-          status  = os.environ["JOB_STATUS"]   # success | failure | cancelled
           version = tag.lstrip("v")
           pub_url = f"https://pub.dev/packages/fletch/versions/{version}"
-          run_url = f"https://github.com/{repo}/actions/runs/${{ github.run_id }}"
 
-          if status == "success":
-              title  = f"📦 fletch {tag} published to pub.dev"
-              desc   = f"All tests passed and the package is live."
-              color  = 0x57F287   # green
-          elif status == "failure":
-              title  = f"❌ fletch {tag} publish FAILED"
-              desc   = f"The publish workflow failed — check the logs."
-              color  = 0xED4245   # red
-          else:
-              title  = f"⚠️ fletch {tag} publish cancelled"
-              desc   = f"The publish workflow was cancelled."
-              color  = 0xFEE75C   # yellow
-
-          fields = [
-              {"name": "Version",      "value": version,                              "inline": True},
-              {"name": "Triggered by", "value": actor,                                "inline": True},
-              {"name": "pub.dev",      "value": f"[View package]({pub_url})",         "inline": False},
-              {"name": "Workflow run", "value": f"[View logs]({run_url})",            "inline": False},
-          ]
-
-          # Only show pub.dev link on success
-          if status != "success":
-              fields = [f for f in fields if f["name"] != "pub.dev"]
+          # Post directly to #announcements via the bot token
+          channel_id = "1455639308089163948"
+          url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
 
           payload = {"embeds": [{
-              "title":       title,
-              "description": desc,
-              "color":       color,
-              "fields":      fields,
-              "footer":      {"text": repo},
+              "title":       f"📦 fletch {tag} published to pub.dev",
+              "description": "All tests passed and the package is live.",
+              "color":       0x57F287,
+              "fields": [
+                  {"name": "Version",      "value": version,                      "inline": True},
+                  {"name": "Published by", "value": actor,                        "inline": True},
+                  {"name": "pub.dev",      "value": f"[View package]({pub_url})", "inline": False},
+              ],
+              "footer": {"text": repo},
           }]}
 
           req = urllib.request.Request(
-              webhook,
+              url,
               data=json.dumps(payload).encode(),
-              headers={"Content-Type": "application/json"},
+              headers={
+                  "Authorization": f"Bot {token}",
+                  "Content-Type":  "application/json",
+              },
           )
           try:
               urllib.request.urlopen(req)
-              print(f"Discord notified: {status}")
+              print(f"Discord notified for {tag}")
           except Exception as exc:
-              sys.stderr.write(f"Discord notification failed: {exc}\n")
-              # Never fail the workflow over a notification
+              print(f"Discord notification failed: {exc}")
           PY
