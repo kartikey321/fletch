@@ -5,6 +5,22 @@ All notable changes to fletch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-02-26
+
+### Added
+
+- **`listenSecure(port, SecurityContext, {...})`** — binds an `HttpServer` over TLS natively,
+  supporting `requestClientCertificate`, `shared`, `backlog`, and `v6Only`.
+- **`serveWith(HttpServer)`** — attaches Fletch to a pre-created `HttpServer`, enabling Unix
+  sockets, custom TLS configurations, and external server lifecycle management (e.g. tests,
+  `server_native` Rust transport).
+- **Low-level bind options on `listen()`** — `backlog` and `v6Only` parameters are now
+  forwarded to `HttpServer.bind()`.
+- **Parity in `IsolatedContainer.listen()`** — `shared`, `backlog`, and `v6Only` added for
+  consistency with the main `Fletch.listen()`.
+- **13 new tests** covering `serveWith` routing, middleware, error handling, `waitUntilClosed`,
+  multi-server scenarios, and `listen()` bind options.
+
 ## [2.0.6] - 2026-02-22
 
 ### Fixed

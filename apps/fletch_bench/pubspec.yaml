@@ -1,0 +1,12 @@
+name: fletch_bench
+description: Throughput and latency benchmark — dart:io HttpServer vs NativeHttpServer (Rust)
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  fletch:
+    path: ../../packages/fletch
+  server_native: ^0.1.3+1
