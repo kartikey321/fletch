@@ -142,10 +142,12 @@ code changes beyond `NativeHttpServer.bind(...)`.
 
 ### server_native + isolates: flat scaling
 
-Adding Dart isolates on top of `server_native` did not improve throughput (9,596 →
-9,525 req/s, effectively flat). The Rust runtime already saturates available I/O
-capacity internally; adding more Dart accept-loops creates contention rather than
-parallelism at the transport layer.
+Adding Dart isolates on top of `server_native` did not improve throughput (and in fact,
+adds overhead). The Rust proxy runs its own async Tokio thread pool that saturates available
+I/O capacity internally. Adding more Dart isolates binding to the same port simply creates
+N polling Rust runtimes (if `nativeCallback: true`) or socket contention (if `nativeCallback: false`).
+
+The proxy architecture does not currently scale with Dart isolates in the same way `dart:io` does.
 
 ---
 

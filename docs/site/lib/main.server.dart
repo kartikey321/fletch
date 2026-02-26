@@ -77,7 +77,7 @@ void main() {
 
               // Discord Community
               a(
-                href: 'hhttps://discord.gg/rykqYF6Jvn',
+                href: 'https://discord.gg/rykqYF6Jvn',
                 target: Target.blank,
                 classes: 'discord-nav-item',
                 attributes: {
@@ -145,6 +145,7 @@ void main() {
                 title: 'Advanced',
                 links: [
                   SidebarLink(text: "Isolated Containers", href: '/advanced/isolated-containers'),
+                  SidebarLink(text: "Server Transport", href: '/advanced/server-transport'),
                 ],
               ),
               SidebarGroup(
