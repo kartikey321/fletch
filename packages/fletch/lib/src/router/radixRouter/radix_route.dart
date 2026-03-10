@@ -106,13 +106,25 @@ class RadixRouter implements RouterInterface {
       }
     }
 
-    // Finally wildcard routes
+    // Finally wildcard routes (single-segment)
     for (final child in node.children.values) {
       if (child.isWildcard) {
         final paramBackup = _handleParam(child, params, segment);
         final match = _findRouteMatch(child, segments, nextDepth, method, params);
         if (match != null) return match;
         _restoreParam(child, params, paramBackup);
+      }
+    }
+
+    // Glob wildcard — matches ALL remaining segments (including this one)
+    for (final child in node.children.values) {
+      if (child.isGlob) {
+        // A glob consumes every remaining segment; check that this node has
+        // a handler for the requested method.
+        final handler = child.handlers[method];
+        if (handler != null) {
+          return RouteMatch(handler, pathParams: params);
+        }
       }
     }
 
@@ -130,6 +142,10 @@ class RadixRouter implements RouterInterface {
   }
 
   RadixNode _createNode(String segment) {
+    // Bare `*` → glob wildcard that matches all remaining path segments.
+    if (segment == '*') {
+      return RadixNode.glob();
+    }
     if (segment.startsWith(':')) {
       final match =
           RegExp(r':([a-zA-Z_]\w*)(?:\(([^)]+)\))?').firstMatch(segment);
