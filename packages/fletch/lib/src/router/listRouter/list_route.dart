@@ -32,8 +32,9 @@ class ListRouter implements RouterInterface {
   RouteMatch? findRoute(String method, String path) {
     // First check isolated routers
     for (final entry in _isolatedRoutes.values) {
-      if (path.startsWith(entry.prefix!)) {
-        final remainingPath = path.substring(entry.prefix!.length);
+      final prefix = entry.prefix!;
+      if (_matchesIsolatedPrefix(path, prefix)) {
+        final remainingPath = _remainingPathAfterPrefix(path, prefix);
         final normalizedPath = remainingPath.isEmpty ? '' : remainingPath;
         return entry.isolatedRouter!.findRoute(method, normalizedPath);
       }
@@ -45,5 +46,16 @@ class ListRouter implements RouterInterface {
       if (match != null) return match;
     }
     return null;
+  }
+
+  bool _matchesIsolatedPrefix(String path, String prefix) {
+    if (prefix == '/') return true;
+    return path == prefix || path.startsWith('$prefix/');
+  }
+
+  String _remainingPathAfterPrefix(String path, String prefix) {
+    if (prefix == '/') return path;
+    if (path == prefix) return '';
+    return path.substring(prefix.length);
   }
 }

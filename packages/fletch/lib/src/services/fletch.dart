@@ -74,6 +74,13 @@ class Fletch extends BaseContainer {
   /// Maximum size in bytes for file uploads (default: 100MB).
   final int maxFileSize;
 
+  /// Expose internal error details in responses (default: `false`).
+  ///
+  /// Set to `true` during local development to see full exception messages.
+  /// **Never enable in production** — exception strings can leak connection
+  /// strings, file paths, and other sensitive implementation details.
+  final bool debug;
+
   /// Maximum time a request handler can run before timing out.
   ///
   /// Set to `null` to disable request timeouts entirely, which eliminates the
@@ -162,6 +169,7 @@ class Fletch extends BaseContainer {
     this.maxFileSize = 100 * 1024 * 1024, // 100MB
     this.requestTimeout = const Duration(seconds: 30), // null = no timeout
     this.shutdownTimeout = const Duration(seconds: 30),
+    this.debug = false,
     this.sessionSecret,
     SessionStore? sessionStore,
     super.secureCookies,
@@ -169,6 +177,7 @@ class Fletch extends BaseContainer {
     super.router,
     super.container,
   }) : super(
+          debug: debug,
           sessionStore: sessionStore ?? MemorySessionStore(),
           sessionSigner:
               sessionSecret != null ? SessionSigner(sessionSecret) : null,
@@ -465,6 +474,31 @@ class Fletch extends BaseContainer {
   /// Builds a rate limiter middleware backed by [store] (or an in-memory
   /// default). Requests exceeding [maxRequests] within [window] receive a 429
   /// response. Customize [keyGenerator] to throttle by user/token/etc.
+  ///
+  /// ## Reverse-proxy deployments
+  ///
+  /// The default key is the **TCP-layer remote IP**. Behind a reverse proxy
+  /// (nginx, Cloudflare, AWS ALB) every request arrives from the proxy's IP,
+  /// collapsing all real clients into a single bucket.
+  ///
+  /// Supply a [keyGenerator] that reads a trusted forwarded-IP header instead:
+  ///
+  /// ```dart
+  /// app.use(app.rateLimiter(
+  ///   keyGenerator: (req) {
+  ///     // Only read this header when you control the proxy and it strips
+  ///     // any client-supplied X-Forwarded-For before adding its own.
+  ///     final forwarded = req.headers.value('x-forwarded-for');
+  ///     // Take the first IP in the chain (original client).
+  ///     return forwarded?.split(',').first.trim()
+  ///         ?? req.httpRequest.connectionInfo?.remoteAddress.address
+  ///         ?? 'unknown';
+  ///   },
+  /// ));
+  /// ```
+  ///
+  /// **Warning**: never trust `X-Forwarded-For` unless your proxy is
+  /// configured to strip the header from incoming client requests first.
   MiddlewareHandler rateLimiter({
     int maxRequests = 100,
     Duration window = const Duration(minutes: 1),
@@ -615,11 +649,16 @@ class Fletch extends BaseContainer {
     try {
       final statusCode = error is HttpError ? error.statusCode : 500;
 
+      final errorMessage = error is HttpError
+          ? error.message
+          : debug
+              ? error.toString()
+              : 'Internal Server Error';
       httpRequest.response
         ..statusCode = statusCode
         ..headers.contentType = ContentType.json
         ..write(jsonEncode({
-          'error': error.toString(),
+          'error': errorMessage,
           'statusCode': statusCode,
         }));
 

@@ -214,5 +214,38 @@ void main() {
 
       expect(response.headers['x-request-id'], equals('abc-123'));
     });
+
+    test('extracts real session cookie despite prefixed cookie without space',
+        () async {
+      await harness?.dispose();
+      harness = TestServerHarness(
+        app: Fletch(
+          sessionSecret: 'cookie-parser-security-test-secret-32+',
+          secureCookies: false,
+        ),
+      );
+
+      harness!.app.get('/login', (req, res) {
+        req.session['user'] = 'alice';
+        res.text('ok');
+      });
+      harness!.app.get('/me', (req, res) {
+        res.text((req.session['user'] ?? 'none').toString());
+      });
+
+      final login = await harness!.get('/login');
+      final setCookie = login.headers[HttpHeaders.setCookieHeader]!;
+      final signedCookie = setCookie.split(';').first.split('=').sublist(1).join('=');
+
+      final craftedCookie =
+          'evil${Request.sessionCookieName}=attacker;${Request.sessionCookieName}=$signedCookie';
+      final me = await harness!.get(
+        '/me',
+        headers: {HttpHeaders.cookieHeader: craftedCookie},
+      );
+
+      expect(me.statusCode, HttpStatus.ok);
+      expect(me.body, 'alice');
+    });
   });
 }

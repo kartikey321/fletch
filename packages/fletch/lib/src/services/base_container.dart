@@ -15,6 +15,12 @@ abstract class BaseContainer {
   final List<MiddlewareHandler> _middleware = [];
   final GetIt container;
   final bool secureCookies;
+
+  /// When `true`, full exception details (stack traces, internal messages) are
+  /// included in error responses.  Keep `false` (the default) in production
+  /// to avoid leaking internal implementation details to clients.
+  final bool debug;
+
   final SessionStore? sessionStore;
   final SessionSigner? sessionSigner;
   ErrorHandler? _errorHandler;
@@ -28,6 +34,7 @@ abstract class BaseContainer {
     GetIt? container,
     Logger? logger,
     this.secureCookies = true,
+    this.debug = false,
     this.sessionStore,
     this.sessionSigner,
   })  : router = router ?? RadixRouter(),
@@ -295,12 +302,16 @@ abstract class BaseContainer {
     // actually touched req.session — skips all cookie + store work on routes
     // that never need a session (e.g. health checks, public API endpoints).
     if (request.sessionTouched) {
-      // Emit Set-Cookie for brand-new sessions
-      if (request.isNewSession &&
-          !response.hasCookie(Request.sessionCookieName)) {
-        String cookieValue = request.session.id;
+      final session = request.session;
+
+      // Emit Set-Cookie when: (a) brand-new session, or (b) session was
+      // regenerated (new ID after privilege escalation, e.g. login).
+      final needsCookie = (request.isNewSession || session.wasRegenerated) &&
+          !response.hasCookie(Request.sessionCookieName);
+      if (needsCookie) {
+        String cookieValue = session.id;
         if (request.sessionSigner != null) {
-          cookieValue = request.sessionSigner!.sign(request.session.id);
+          cookieValue = request.sessionSigner!.sign(session.id);
         }
         response.cookie(
           Request.sessionCookieName,
@@ -313,7 +324,7 @@ abstract class BaseContainer {
 
       // Save session data to store if modified
       try {
-        await request.session.save();
+        await session.save();
       } catch (e, stack) {
         logger.e('Failed to save session', error: e, stackTrace: stack);
       }
@@ -368,8 +379,11 @@ abstract class BaseContainer {
       response.json({'error': error.message, 'data': error.data});
     } else {
       response.setStatus(HttpStatus.internalServerError);
-      response.json(
-          {'error': 'Internal Server Error', 'message': error.toString()});
+      final body = <String, dynamic>{'error': 'Internal Server Error'};
+      // Only expose internal details in debug mode — in production, leaking
+      // exception messages can reveal DB connection strings, file paths, etc.
+      if (debug) body['message'] = error.toString();
+      response.json(body);
     }
   }
 
@@ -377,7 +391,7 @@ abstract class BaseContainer {
   Future<void> onDispose() async {
     // Dispose session store if provided
     await sessionStore?.dispose();
-    container.reset();
+    await container.reset();
   }
 
   static Logger _defaultLogger() {

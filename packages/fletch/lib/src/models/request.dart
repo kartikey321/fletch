@@ -1,12 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:fletch/fletch.dart';
 import 'package:get_it/get_it.dart';
 import 'package:meta/meta.dart';
 import 'package:mime/mime.dart';
+
+final _secureRandom = Random.secure();
+
+String _randomToken(int byteLength) {
+  final bytes =
+      List<int>.generate(byteLength, (_) => _secureRandom.nextInt(256));
+  return base64Url.encode(bytes).replaceAll('=', '');
+}
 
 /// Represents an incoming HTTP request with convenient accessors for
 /// common data like headers, query parameters, request body, and session.
@@ -36,8 +45,12 @@ class Request {
   /// The underlying Dart HttpRequest.
   final HttpRequest httpRequest;
 
-  /// Unique identifier for this request (UUID v4).
-  final String requestId;
+  /// Unique identifier for this request.
+  ///
+  /// Echoes the incoming `x-request-id` / `x-correlation-id` header when
+  /// present; otherwise a random `req_*` token generated on first access.
+  String get requestId => _requestId ??= _generateRequestId();
+  String? _requestId;
 
   /// Path parameters extracted from the route pattern.
   ///
@@ -68,11 +81,17 @@ class Request {
   /// access — routes that never read or write session data pay zero cost.
   Session get session {
     sessionTouched = true;
-    return _sessionInstance ??= Session(_sessionId, store: _sessionStoreRef);
+    if (_sessionInstance != null) return _sessionInstance!;
+    // Generate a new session ID only on first access — routes that never
+    // touch the session pay zero Random.secure() cost.
+    _sessionId ??= _generateSessionId();
+    return _sessionInstance = Session(_sessionId!, store: _sessionStoreRef);
   }
 
   // Backing state for the lazy session.
-  final String _sessionId;
+  // null for brand-new sessions until first access; non-null for returning
+  // visitors (ID extracted from the verified cookie).
+  String? _sessionId;
   final SessionStore? _sessionStoreRef;
   Session? _sessionInstance;
 
@@ -105,8 +124,9 @@ class Request {
   /// as application code accessing the session.
   @internal
   Future<void> preloadSession() {
-    // Create the Session object if not yet done, but don't set sessionTouched.
-    final s = _sessionInstance ??= Session(_sessionId, store: _sessionStoreRef);
+    // Only called for returning visitors — _sessionId is always non-null here
+    // because it was extracted from the verified session cookie.
+    final s = _sessionInstance ??= Session(_sessionId!, store: _sessionStoreRef);
     return s.load();
   }
 
@@ -115,8 +135,8 @@ class Request {
 
   Request(
     this.httpRequest,
-    String sessionId,
-    this.requestId,
+    String? sessionId,
+    String? requestId,
     this.container, {
     bool isSessionNew = false,
     SessionStore? sessionStore,
@@ -129,6 +149,7 @@ class Request {
     this.sessionSigner,
   })  : _isSessionNew = isSessionNew,
         _sessionId = existingSession?.id ?? sessionId,
+        _requestId = requestId,
         _sessionStoreRef = sessionStore,
         _sessionInstance = existingSession;
 
@@ -230,27 +251,25 @@ class Request {
     SessionStore? sessionStore,
   }) {
     String? rawSessionId;
-    String sessionId;
+    String? sessionId;
     bool isSessionNew = false;
     
-    // Efficiently extract session cookie string without parsing all cookies
+    // Extract session cookie by splitting on ';' and checking each part
+    // for an exact name match — prevents prefix-confusion attacks where a
+    // cookie like "evilfletch.sid=x;fletch.sid=good" would otherwise return
+    // the wrong value with a simple indexOf approach.
     final cookieHeaders = httpRequest.headers[HttpHeaders.cookieHeader];
+    outer:
     if (cookieHeaders != null) {
       for (final header in cookieHeaders) {
-        final idx = header.indexOf('$_sessionCookieName=');
-        // Guard against prefix-matching a longer name (e.g. "evilSessionId=").
-        // A valid match is either at position 0 (first cookie) or immediately
-        // after the "; " separator that browsers always emit.
-        if (idx != -1 &&
-            (idx == 0 ||
-                (idx >= 2 &&
-                    header[idx - 2] == ';' &&
-                    header[idx - 1] == ' '))) {
-          final start = idx + _sessionCookieName.length + 1;
-          var end = header.indexOf(';', start);
-          if (end == -1) end = header.length;
-          rawSessionId = header.substring(start, end);
-          break;
+        for (final part in header.split(';')) {
+          final token = part.trimLeft();
+          final eqIdx = token.indexOf('=');
+          if (eqIdx <= 0) continue;
+          if (token.substring(0, eqIdx) == _sessionCookieName) {
+            rawSessionId = token.substring(eqIdx + 1);
+            break outer;
+          }
         }
       }
     }
@@ -261,27 +280,26 @@ class Request {
         if (verifiedId != null) {
           sessionId = verifiedId;
         } else {
-          sessionId = _generateSessionId();
+          // Invalid signature — treat as new session; ID generated lazily.
           isSessionNew = true;
         }
       } else {
         sessionId = rawSessionId;
       }
     } else {
-      sessionId = _generateSessionId();
+      // No cookie — new session; ID generated lazily on first req.session access.
       isSessionNew = true;
     }
 
-    // Session object is NOT created here — it's built lazily inside the
-    // session getter so routes that never touch it pay zero allocation cost.
-    final requestId = httpRequest.headers.value('x-request-id') ??
-        httpRequest.headers.value('x-correlation-id') ??
-        _generateRequestId();
+    // Both session ID and request ID are lazy: generated only when first
+    // accessed so routes that touch neither pay zero Random.secure() cost.
+    final incomingRequestId = httpRequest.headers.value('x-request-id') ??
+        httpRequest.headers.value('x-correlation-id');
 
     return Request(
       httpRequest,
       sessionId,
-      requestId,
+      incomingRequestId,
       container,
       isSessionNew: isSessionNew,
       sessionStore: sessionStore,
@@ -291,21 +309,9 @@ class Request {
     );
   }
 
-  // Isolate-unique prefix derived from the current time at startup.
-  // Prevents session/request ID collisions when multiple isolates share an
-  // external session store (each isolate has its own copy of static state).
-  static final String _isolatePrefix =
-      DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+  static String _generateSessionId() => 'ses_${_randomToken(24)}';
 
-  static var _sessionCounter = 0;
-  static String _generateSessionId() {
-    return 'ses_${_isolatePrefix}_${++_sessionCounter}';
-  }
-
-  static var _requestCounter = 0;
-  static String _generateRequestId() {
-    return 'req_${_isolatePrefix}_${++_requestCounter}';
-  }
+  static String _generateRequestId() => 'req_${_randomToken(12)}';
 
   /// Indicates whether a fresh session identifier was generated for this
   /// request (and therefore needs to be persisted back via response cookies).
@@ -466,16 +472,53 @@ class Request {
 /// // Session is automatically saved after request completes
 /// ```
 class Session {
-  final String id;
+  String _id;
   final SessionStore? _store;
   Map<String, dynamic> _data = {};
   bool _isDirty = false;
   bool _isLoaded = false;
+  bool _wasRegenerated = false;
 
-  Session(this.id, {SessionStore? store}) : _store = store {
+  /// The current session identifier.
+  ///
+  /// Changes after a call to [regenerate].
+  String get id => _id;
+
+  /// Whether [regenerate] has been called on this session.
+  bool get wasRegenerated => _wasRegenerated;
+
+  Session(String id, {SessionStore? store})
+      : _id = id,
+        _store = store {
     // If no store, mark as loaded since there's nothing to load
     if (store == null) {
       _isLoaded = true;
+    }
+  }
+
+  /// Replaces the session ID with a new cryptographically-random value and
+  /// destroys the old session record in the store.
+  ///
+  /// Call this after a privilege change (e.g. successful login) to prevent
+  /// [session fixation attacks](https://owasp.org/www-community/attacks/Session_fixation).
+  ///
+  /// ```dart
+  /// app.post('/login', (req, res) async {
+  ///   final ok = await validateCredentials(req);
+  ///   if (ok) {
+  ///     await req.session.regenerate(); // invalidate old ID
+  ///     req.session['userId'] = user.id;
+  ///   }
+  /// });
+  /// ```
+  Future<void> regenerate() async {
+    if (_wasRegenerated) return; // idempotent
+    final oldId = _id;
+    _id = _randomToken(24);
+    _wasRegenerated = true;
+    _isDirty = true;
+    if (_store != null) {
+      await _store.destroy(oldId);
     }
   }
 
@@ -575,4 +618,28 @@ class _FormDataPayload {
 
   bool get hasFiles => files.isNotEmpty;
   bool get isEmpty => fields.isEmpty && files.isEmpty;
+}
+
+/// Safety helpers for uploaded files.
+///
+/// Always prefer [sanitizedFilename] over [MultipartFile.filename] when
+/// constructing file-system paths — the raw value is attacker-controlled and
+/// may contain path-traversal sequences such as `../../etc/passwd`.
+extension MultipartFileExtension on MultipartFile {
+  /// Returns the uploaded filename with all path components stripped.
+  ///
+  /// Safe to use when building file-system paths.  `null` when no filename
+  /// was supplied by the client.
+  ///
+  /// ```dart
+  /// final safe = file.sanitizedFilename; // 'avatar.png', never '../secret'
+  /// ```
+  String? get sanitizedFilename {
+    final name = filename;
+    if (name == null) return null;
+    // Split on both / and \ to neutralise Windows-style traversal sequences.
+    final parts = name.split(RegExp(r'[/\\]'));
+    final last = parts.lastWhere((p) => p.isNotEmpty, orElse: () => '');
+    return last.isEmpty ? null : last;
+  }
 }
