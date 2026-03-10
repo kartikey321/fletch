@@ -35,7 +35,11 @@ class Response {
   dynamic body;
 
   /// Response headers as key-value pairs.
-  Map<String, String> headers = {};
+  ///
+  /// The map is allocated on first write to avoid a `LinkedHashMap`
+  /// allocation for responses that set no custom headers.
+  Map<String, String> get headers => _headers ??= {};
+  Map<String, String>? _headers;
 
   /// Whether the response body is binary data.
   bool isBinary = false;
@@ -57,8 +61,8 @@ class Response {
   bool get isSent => _isSent;
 
   Response({this.statusCode = 200, this.body, Map<String, String>? headers}) {
-    if (headers != null) {
-      this.headers.addAll(headers);
+    if (headers != null && headers.isNotEmpty) {
+      _headers = Map<String, String>.of(headers);
     }
   }
 
@@ -141,6 +145,8 @@ class Response {
     });
   }
 
+  static final _jsonUtf8Encoder = JsonUtf8Encoder();
+
   /// Sends a JSON response.
   ///
   /// Automatically sets Content-Type to application/json.
@@ -151,11 +157,11 @@ class Response {
   /// res.json({'success': true, 'data': users});
   /// res.json({'error': 'Not found'}, statusCode: 404);
   /// ```
-  void json(Map<String, dynamic> data,
-      {int? statusCode, Encoding encoding = utf8}) {
-    // JSON must be encoded to string first
-    body = jsonEncode(data);
-    headers['Content-Type'] = 'application/json; charset=${encoding.name}';
+  void json(dynamic data,
+      {int? statusCode}) {
+    body = _jsonUtf8Encoder.convert(data);
+    isBinary = true;
+    headers['Content-Type'] = 'application/json; charset=utf-8';
     if (statusCode != null) {
       setStatus(statusCode);
     }
@@ -342,7 +348,7 @@ class Response {
 
     httpResponse.statusCode = statusCode;
 
-    headers.forEach((name, value) {
+    _headers?.forEach((name, value) {
       httpResponse.headers.set(name, value);
     });
 
@@ -404,7 +410,7 @@ class Response {
 
     // Normal response handling
     if (isBinary) {
-      httpResponse.add(body as Uint8List);
+      httpResponse.add(body as List<int>);
     } else if (body != null) {
       httpResponse.write(body);
     }

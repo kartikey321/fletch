@@ -66,4 +66,21 @@ class _RouteEntry {
   }
 
   Map<String, String> extractParams(String path) => pattern.extractParams(path);
+
+  /// Matches method+path in a single regex pass and returns a [RouteMatch]
+  /// directly, avoiding the redundant second [extractParams] call.
+  RouteMatch? tryMatch(String method, String path) {
+    if (this.method != method) return null;
+    final regexMatch = pattern.regex.firstMatch(path);
+    if (regexMatch == null) return null;
+    // No params on this route — reuse the shared empty map, zero allocation.
+    if (pattern.paramNames.isEmpty) {
+      return RouteMatch(handler);
+    }
+    final params = <String, String>{};
+    for (var i = 0; i < pattern.paramNames.length; i++) {
+      params[pattern.paramNames[i]] = regexMatch.group(i + 1)!;
+    }
+    return RouteMatch(handler, pathParams: params);
+  }
 }

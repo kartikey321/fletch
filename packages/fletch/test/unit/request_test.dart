@@ -175,7 +175,12 @@ void main() {
     tearDown(() => harness?.dispose());
 
     test('sets HttpOnly session cookie when missing', () async {
-      harness!.app.get('/session', (req, res) => res.text('OK'));
+      // Session cookie is only emitted when the handler actually accesses
+      // req.session (lazy session initialisation).
+      harness!.app.get('/session', (req, res) {
+        req.session['touched'] = true; // access the session
+        res.text('OK');
+      });
 
       final response = await harness!.get('/session');
 

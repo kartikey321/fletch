@@ -20,6 +20,21 @@ void main() {
 
       expect(response.statusCode, 200);
       expect(response.body, 'Hello World!');
+      // Session cookie is only emitted when req.session is accessed; a handler
+      // that never touches the session produces no Set-Cookie header.
+      expect(response.headers['set-cookie'], isNull);
+    });
+
+    test('GET / emits session cookie when handler accesses req.session',
+        () async {
+      harness.app.get('/', (Request req, Response res) {
+        req.session['visited'] = true; // touch the session
+        res.text('Hello World!');
+      });
+
+      final response = await harness.get('/');
+
+      expect(response.statusCode, 200);
       expect(
           response.headers['set-cookie'], contains(Request.sessionCookieName));
     });

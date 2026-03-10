@@ -5,8 +5,8 @@ import 'dart:typed_data';
 
 import 'package:fletch/fletch.dart';
 import 'package:get_it/get_it.dart';
+import 'package:meta/meta.dart';
 import 'package:mime/mime.dart';
-import 'package:uuid/uuid.dart';
 
 /// Represents an incoming HTTP request with convenient accessors for
 /// common data like headers, query parameters, request body, and session.
@@ -49,7 +49,8 @@ class Request {
   /// For URL `/search?q=dart&page=2`:
   /// - `query['q']` returns `'dart'`
   /// - `query['page']` returns `'2'`
-  late final Map<String, String> query;
+  Map<String, String>? _query;
+  Map<String, String> get query => _query ??= httpRequest.uri.queryParameters;
 
   /// Session for this request.
   ///
@@ -58,7 +59,22 @@ class Request {
   /// req.session['key'] = 'value';
   /// final value = req.session['key'];
   /// ```
-  final Session session;
+  ///
+  /// The session is lazy: no session cookie is emitted and no store I/O
+  /// occurs unless this getter is actually accessed during the request.
+  /// Returns the session for this request.
+  ///
+  /// The [Session] object (and its internal data map) is created on first
+  /// access — routes that never read or write session data pay zero cost.
+  Session get session {
+    sessionTouched = true;
+    return _sessionInstance ??= Session(_sessionId, store: _sessionStoreRef);
+  }
+
+  // Backing state for the lazy session.
+  final String _sessionId;
+  final SessionStore? _sessionStoreRef;
+  Session? _sessionInstance;
 
   /// Dependency injection container for this request.
   final GetIt container;
@@ -78,21 +94,43 @@ class Request {
   Map<String, dynamic>? _formDataCache;
   final bool _isSessionNew;
 
+  /// `true` once [session] has been accessed during this request lifecycle.
+  /// Used by the framework to skip session I/O on routes that never touch it.
+  /// Framework-internal — do not use in application code.
+  @internal
+  bool sessionTouched = false;
+
+  /// Loads the session from the store without marking [sessionTouched].
+  /// Used by the framework for returning-visitor pre-load; does not count
+  /// as application code accessing the session.
+  @internal
+  Future<void> preloadSession() {
+    // Create the Session object if not yet done, but don't set sessionTouched.
+    final s = _sessionInstance ??= Session(_sessionId, store: _sessionStoreRef);
+    return s.load();
+  }
+
   /// Parsed cookies from the Cookie header.
   List<Cookie> cookies = [];
 
   Request(
     this.httpRequest,
-    this.session,
+    String sessionId,
     this.requestId,
     this.container, {
     bool isSessionNew = false,
+    SessionStore? sessionStore,
+    /// Provide a pre-built [Session] to share across scoped sub-requests
+    /// (e.g. IsolatedContainer). When given, [sessionId] and [sessionStore]
+    /// are ignored for session construction.
+    Session? existingSession,
     this.maxBodySize = 10 * 1024 * 1024,
     this.maxFileSize = 100 * 1024 * 1024,
     this.sessionSigner,
-  }) : _isSessionNew = isSessionNew {
-    query = httpRequest.uri.queryParameters;
-  }
+  })  : _isSessionNew = isSessionNew,
+        _sessionId = existingSession?.id ?? sessionId,
+        _sessionStoreRef = sessionStore,
+        _sessionInstance = existingSession;
 
   /// HTTP method (GET, POST, PUT, DELETE, etc.).
   String get method => httpRequest.method;
@@ -191,58 +229,82 @@ class Request {
     SessionSigner? sessionSigner,
     SessionStore? sessionStore,
   }) {
-    Cookie? sessionCookie;
-    bool isSessionNew = false;
+    String? rawSessionId;
     String sessionId;
+    bool isSessionNew = false;
+    
+    // Efficiently extract session cookie string without parsing all cookies
+    final cookieHeaders = httpRequest.headers[HttpHeaders.cookieHeader];
+    if (cookieHeaders != null) {
+      for (final header in cookieHeaders) {
+        final idx = header.indexOf('$_sessionCookieName=');
+        // Guard against prefix-matching a longer name (e.g. "evilSessionId=").
+        // A valid match is either at position 0 (first cookie) or immediately
+        // after the "; " separator that browsers always emit.
+        if (idx != -1 &&
+            (idx == 0 ||
+                (idx >= 2 &&
+                    header[idx - 2] == ';' &&
+                    header[idx - 1] == ' '))) {
+          final start = idx + _sessionCookieName.length + 1;
+          var end = header.indexOf(';', start);
+          if (end == -1) end = header.length;
+          rawSessionId = header.substring(start, end);
+          break;
+        }
+      }
+    }
 
-    try {
-      sessionCookie = httpRequest.cookies
-          .firstWhere((cookie) => cookie.name == _sessionCookieName);
-
-      // Verify signed session cookie if signer is available
+    if (rawSessionId != null) {
       if (sessionSigner != null) {
-        final verifiedId = sessionSigner.verify(sessionCookie.value);
+        final verifiedId = sessionSigner.verify(rawSessionId);
         if (verifiedId != null) {
           sessionId = verifiedId;
         } else {
-          // Invalid signature - generate new session
           sessionId = _generateSessionId();
           isSessionNew = true;
         }
       } else {
-        // No signing - use cookie value as-is
-        sessionId = sessionCookie.value;
+        sessionId = rawSessionId;
       }
-    } on StateError {
-      // No session cookie found - create new session
+    } else {
       sessionId = _generateSessionId();
       isSessionNew = true;
     }
 
-    final session = Session(sessionId, store: sessionStore);
+    // Session object is NOT created here — it's built lazily inside the
+    // session getter so routes that never touch it pay zero allocation cost.
     final requestId = httpRequest.headers.value('x-request-id') ??
         httpRequest.headers.value('x-correlation-id') ??
         _generateRequestId();
 
     return Request(
       httpRequest,
-      session,
+      sessionId,
       requestId,
       container,
       isSessionNew: isSessionNew,
+      sessionStore: sessionStore,
       maxBodySize: maxBodySize,
       maxFileSize: maxFileSize,
       sessionSigner: sessionSigner,
     );
   }
 
-  /// Generate a cryptographically secure session ID using UUID v4
+  // Isolate-unique prefix derived from the current time at startup.
+  // Prevents session/request ID collisions when multiple isolates share an
+  // external session store (each isolate has its own copy of static state).
+  static final String _isolatePrefix =
+      DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+
+  static var _sessionCounter = 0;
   static String _generateSessionId() {
-    return const Uuid().v4();
+    return 'ses_${_isolatePrefix}_${++_sessionCounter}';
   }
 
+  static var _requestCounter = 0;
   static String _generateRequestId() {
-    return const Uuid().v4();
+    return 'req_${_isolatePrefix}_${++_requestCounter}';
   }
 
   /// Indicates whether a fresh session identifier was generated for this

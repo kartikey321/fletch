@@ -23,6 +23,12 @@ class ListRouter implements RouterInterface {
   }
 
   @override
+  void clear() {
+    _routes.clear();
+    _isolatedRoutes.clear();
+  }
+
+  @override
   RouteMatch? findRoute(String method, String path) {
     // First check isolated routers
     for (final entry in _isolatedRoutes.values) {
@@ -34,13 +40,9 @@ class ListRouter implements RouterInterface {
     }
 
     // Then check regular routes
-    for (var route in _routes) {
-      if (route.matches(method, path)) {
-        return RouteMatch(
-          route.handler,
-          pathParams: route.extractParams(path),
-        );
-      }
+    for (final route in _routes) {
+      final match = route.tryMatch(method, path);
+      if (match != null) return match;
     }
     return null;
   }

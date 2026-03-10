@@ -13,6 +13,10 @@ abstract class RouterInterface {
   RouteMatch? findRoute(String method, String path);
 
   void addIsolatedRouter(String prefix, RouterInterface router);
+
+  /// Remove all registered routes and mounted sub-routers.
+  /// Used by the hot-reload reassemble cycle.
+  void clear();
 }
 
 /// Container for matched route results
@@ -23,6 +27,10 @@ class RouteMatch {
   /// Path parameters extracted from the URL
   final Map<String, String> pathParams;
 
+  /// Shared empty map used when no path parameters exist, avoiding a
+  /// per-request allocation for static routes like `/health`.
+  static const Map<String, String> _empty = {};
+
   RouteMatch(this.handler, {Map<String, String>? pathParams})
-      : pathParams = pathParams ?? {};
+      : pathParams = pathParams ?? _empty;
 }

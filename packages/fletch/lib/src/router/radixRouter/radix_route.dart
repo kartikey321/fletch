@@ -53,8 +53,10 @@ class RadixRouter implements RouterInterface {
 
   @override
   RouteMatch? findRoute(String method, String path) {
-    final normalizedPath = _normalizePath(path);
-    final segments = _splitPath(normalizedPath);
+    // Paths from dart:io HttpRequest.uri.path are already clean — no double
+    // slashes, no trailing slash — so skip the allocating normalization step
+    // on the hot path. Only normalize on addRoute (startup-time, not hot).
+    final segments = _splitPath(path.startsWith('/') ? path.substring(1) : path);
     final params = <String, String>{};
 
     return _findRouteMatch(_root, segments, 0, method, params);
@@ -82,38 +84,36 @@ class RadixRouter implements RouterInterface {
     }
 
     final segment = segments[depth];
-    final processed = <RadixNode>[];
+    final nextDepth = depth + 1;
 
-    // Static routes first
+    // Static routes first — children map is keyed by segment so at most one
+    // static child can match; no need for a "processed" exclusion list.
     for (final child in node.children.values) {
       if (child.isStatic && child.segment == segment) {
-        final match =
-            _findRouteMatch(child, segments, depth + 1, method, params);
+        final match = _findRouteMatch(child, segments, nextDepth, method, params);
         if (match != null) return match;
-        processed.add(child);
+        break; // unique key; no other static child can match this segment
       }
     }
 
     // Then regex routes
-    for (final child in node.children.values
-        .where((c) => c.isRegex && !processed.contains(c))) {
-      if (child.regex!.hasMatch(segment)) {
+    for (final child in node.children.values) {
+      if (child.isRegex && child.regex!.hasMatch(segment)) {
         final paramBackup = _handleParam(child, params, segment);
-        final match =
-            _findRouteMatch(child, segments, depth + 1, method, params);
+        final match = _findRouteMatch(child, segments, nextDepth, method, params);
         if (match != null) return match;
         _restoreParam(child, params, paramBackup);
-        processed.add(child);
       }
     }
 
     // Finally wildcard routes
-    for (final child in node.children.values
-        .where((c) => c.isWildcard && !processed.contains(c))) {
-      final paramBackup = _handleParam(child, params, segment);
-      final match = _findRouteMatch(child, segments, depth + 1, method, params);
-      if (match != null) return match;
-      _restoreParam(child, params, paramBackup);
+    for (final child in node.children.values) {
+      if (child.isWildcard) {
+        final paramBackup = _handleParam(child, params, segment);
+        final match = _findRouteMatch(child, segments, nextDepth, method, params);
+        if (match != null) return match;
+        _restoreParam(child, params, paramBackup);
+      }
     }
 
     return null;
@@ -146,11 +146,21 @@ class RadixRouter implements RouterInterface {
     return RadixNode.static(segment);
   }
 
+  static final _multiSlash = RegExp(r'/+');
+  static final _trimSlash = RegExp(r'^/|/$');
+
   String _normalizePath(String path) => path
-      .replaceAll(RegExp(r'/+'), '/') // Collapse multiple slashes
-      .replaceAll(RegExp(r'^/|/$'), ''); // Trim leading/trailing slashes
+      .replaceAll(_multiSlash, '/') // Collapse multiple slashes
+      .replaceAll(_trimSlash, ''); // Trim leading/trailing slashes
 
   List<String> _splitPath(String path) => path.split('/');
+
+  @override
+  void clear() {
+    _root.children.clear();
+    _root.handlers.clear();
+    _root.isolatedRouter = null;
+  }
 
   String? _handleParam(
       RadixNode node, Map<String, String> params, String value) {

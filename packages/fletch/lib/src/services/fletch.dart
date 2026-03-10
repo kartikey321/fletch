@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:fletch/fletch.dart';
@@ -73,8 +74,15 @@ class Fletch extends BaseContainer {
   /// Maximum size in bytes for file uploads (default: 100MB).
   final int maxFileSize;
 
-  /// Maximum time a request handler can run before timeout (default: 30s).
-  final Duration requestTimeout;
+  /// Maximum time a request handler can run before timing out.
+  ///
+  /// Set to `null` to disable request timeouts entirely, which eliminates the
+  /// per-request `Timer` allocation and is recommended for maximum throughput
+  /// in environments that have their own timeout enforcement (load balancers,
+  /// reverse proxies, etc.).
+  ///
+  /// Default: 30 seconds.
+  final Duration? requestTimeout;
 
   /// Maximum time to wait for active requests during shutdown (default: 30s).
   final Duration shutdownTimeout;
@@ -152,7 +160,7 @@ class Fletch extends BaseContainer {
     bool useCookieParser = true,
     this.maxBodySize = 10 * 1024 * 1024, // 10MB
     this.maxFileSize = 100 * 1024 * 1024, // 100MB
-    this.requestTimeout = const Duration(seconds: 30),
+    this.requestTimeout = const Duration(seconds: 30), // null = no timeout
     this.shutdownTimeout = const Duration(seconds: 30),
     this.sessionSecret,
     SessionStore? sessionStore,
@@ -169,6 +177,29 @@ class Fletch extends BaseContainer {
     if (useCookieParser) {
       use(CookieParser.middleware());
     }
+  }
+
+  /// Registers a [factory] that re-registers all routes and also exposes
+  /// the `ext.fletch.reassemble` VM service extension so the dev tools can
+  /// trigger a route reassembly after each hot reload.
+  ///
+  /// ```dart
+  /// void main() async {
+  ///   final app = Fletch();
+  ///   app.hotReload(() => registerRoutes(app));
+  ///   registerRoutes(app);
+  ///   await app.listen(3000);
+  /// }
+  /// ```
+  @override
+  void hotReload(void Function() factory) {
+    super.hotReload(factory);
+    developer.registerExtension('ext.fletch.reassemble',
+        (method, params) async {
+      reassemble();
+      return developer.ServiceExtensionResponse.result(
+          '{"type":"@Event","kind":"Reassembled"}');
+    });
   }
 
   /// Mounts an [IsolatedContainer] at the specified [prefix] path.
@@ -554,10 +585,15 @@ class Fletch extends BaseContainer {
     _activeRequests++;
 
     try {
-      await handleRequest(httpRequest).timeout(
-        requestTimeout,
-        onTimeout: () => throw HttpError(408, 'Request Timeout'),
-      );
+      final future = handleRequest(httpRequest);
+      if (requestTimeout != null) {
+        await future.timeout(
+          requestTimeout!,
+          onTimeout: () => throw HttpError(408, 'Request Timeout'),
+        );
+      } else {
+        await future;
+      }
     } catch (error, stackTrace) {
       await _safelySendErrorResponse(httpRequest, error, stackTrace);
     } finally {
@@ -605,8 +641,8 @@ class Fletch extends BaseContainer {
     if (maxFileSize <= 0) {
       throw ArgumentError('maxFileSize must be positive');
     }
-    if (requestTimeout <= Duration.zero) {
-      throw ArgumentError('requestTimeout must be positive');
+    if (requestTimeout != null && requestTimeout! <= Duration.zero) {
+      throw ArgumentError('requestTimeout must be positive (or null to disable)');
     }
     if (shutdownTimeout <= Duration.zero) {
       throw ArgumentError('shutdownTimeout must be positive');
