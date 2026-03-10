@@ -149,6 +149,9 @@ class _IsolatedRouterDelegate implements RouterInterface {
   }
 
   @override
+  void clear() => container.router.clear();
+
+  @override
   RouteMatch? findRoute(String method, String path) {
     final delegateMatch = container.router.findRoute(method, path);
     if (delegateMatch == null) {

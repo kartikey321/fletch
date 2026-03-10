@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:fletch/fletch.dart';
@@ -169,6 +170,29 @@ class Fletch extends BaseContainer {
     if (useCookieParser) {
       use(CookieParser.middleware());
     }
+  }
+
+  /// Registers a [factory] that re-registers all routes and also exposes
+  /// the `ext.fletch.reassemble` VM service extension so the dev tools can
+  /// trigger a route reassembly after each hot reload.
+  ///
+  /// ```dart
+  /// void main() async {
+  ///   final app = Fletch();
+  ///   app.hotReload(() => registerRoutes(app));
+  ///   registerRoutes(app);
+  ///   await app.listen(3000);
+  /// }
+  /// ```
+  @override
+  void hotReload(void Function() factory) {
+    super.hotReload(factory);
+    developer.registerExtension('ext.fletch.reassemble',
+        (method, params) async {
+      reassemble();
+      return developer.ServiceExtensionResponse.result(
+          '{"type":"@Event","kind":"Reassembled"}');
+    });
   }
 
   /// Mounts an [IsolatedContainer] at the specified [prefix] path.

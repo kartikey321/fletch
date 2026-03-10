@@ -20,6 +20,7 @@ abstract class BaseContainer {
   final SessionSigner? sessionSigner;
   ErrorHandler? _errorHandler;
   late final Logger logger;
+  void Function()? _routeFactory;
 
   /// Creates a container with optional overrides for router and dependency
   /// scope.
@@ -107,6 +108,34 @@ abstract class BaseContainer {
   /// Unregisters the existing binding for [T].
   void unregister<T extends Object>() {
     container.unregister<T>();
+  }
+
+  /// Registers a [factory] callback that re-registers all routes.
+  ///
+  /// Call this in your server's `main()` before `listen()` to enable
+  /// Phoenix-style hot reload: after each successful VM source reload,
+  /// the dev tools will invoke [reassemble] which clears the router and
+  /// re-calls [factory] so updated named function references take effect.
+  ///
+  /// ```dart
+  /// void main() async {
+  ///   final app = Fletch();
+  ///   app.hotReload(() => registerRoutes(app));
+  ///   registerRoutes(app);
+  ///   await app.listen(3000);
+  /// }
+  /// ```
+  void hotReload(void Function() factory) {
+    _routeFactory = factory;
+  }
+
+  /// Clears all registered routes and re-registers them via the factory
+  /// set by [hotReload]. Called by the VM service extension after a
+  /// successful hot reload so updated named handler bodies take effect.
+  void reassemble() {
+    if (_routeFactory == null) return;
+    router.clear();
+    _routeFactory!();
   }
 
   /// Installs a global error handler.

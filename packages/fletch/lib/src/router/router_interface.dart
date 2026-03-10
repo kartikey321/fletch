@@ -13,6 +13,10 @@ abstract class RouterInterface {
   RouteMatch? findRoute(String method, String path);
 
   void addIsolatedRouter(String prefix, RouterInterface router);
+
+  /// Remove all registered routes and mounted sub-routers.
+  /// Used by the hot-reload reassemble cycle.
+  void clear();
 }
 
 /// Container for matched route results

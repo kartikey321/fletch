@@ -152,6 +152,13 @@ class RadixRouter implements RouterInterface {
 
   List<String> _splitPath(String path) => path.split('/');
 
+  @override
+  void clear() {
+    _root.children.clear();
+    _root.handlers.clear();
+    _root.isolatedRouter = null;
+  }
+
   String? _handleParam(
       RadixNode node, Map<String, String> params, String value) {
     if (!node.isDynamic) return null;
