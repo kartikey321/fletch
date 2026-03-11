@@ -218,10 +218,6 @@ void main() {
       final container = IsolatedContainer();
       container.get('/hello', (req, res) => res.text('standalone'));
 
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final port = server.port;
-      await server.close(); // free the port; listen() will bind fresh
-
       // Use listen() which binds its own server
       final bound = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final boundPort = bound.port;

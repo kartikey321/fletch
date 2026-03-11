@@ -7,6 +7,7 @@ import 'package:fletch/fletch.dart';
 import 'package:fletch/src/middleware/cookies_parser.dart';
 
 /// Common HTTP method constants used across the framework.
+// ignore_for_file: constant_identifier_names
 class RequestTypes {
   static const String GET = 'GET';
   static const String POST = 'POST';
@@ -73,13 +74,6 @@ class Fletch extends BaseContainer {
 
   /// Maximum size in bytes for file uploads (default: 100MB).
   final int maxFileSize;
-
-  /// Expose internal error details in responses (default: `false`).
-  ///
-  /// Set to `true` during local development to see full exception messages.
-  /// **Never enable in production** — exception strings can leak connection
-  /// strings, file paths, and other sensitive implementation details.
-  final bool debug;
 
   /// Maximum time a request handler can run before timing out.
   ///
@@ -169,7 +163,7 @@ class Fletch extends BaseContainer {
     this.maxFileSize = 100 * 1024 * 1024, // 100MB
     this.requestTimeout = const Duration(seconds: 30), // null = no timeout
     this.shutdownTimeout = const Duration(seconds: 30),
-    this.debug = false,
+    super.debug = false,
     this.sessionSecret,
     SessionStore? sessionStore,
     super.secureCookies,
@@ -177,7 +171,6 @@ class Fletch extends BaseContainer {
     super.router,
     super.container,
   }) : super(
-          debug: debug,
           sessionStore: sessionStore ?? MemorySessionStore(),
           sessionSigner:
               sessionSecret != null ? SessionSigner(sessionSecret) : null,

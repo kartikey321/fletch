@@ -2,10 +2,6 @@ import 'dart:io';
 
 import 'package:fletch/fletch.dart';
 import 'package:fletch/src/middleware/cookies_parser.dart';
-import 'package:fletch/src/models/middleware.dart';
-import 'package:fletch/src/models/request.dart';
-import 'package:fletch/src/models/response.dart';
-import 'package:fletch/src/services/dependency_injection.dart';
 import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
 

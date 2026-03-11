@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:fletch/fletch.dart';
 import 'package:test/test.dart';
 
 import '../helpers/test_server_harness.dart';
