@@ -9,18 +9,11 @@ Get started with Fletch in minutes.
 
 ## Install via Pub
 
-Add fletch to your `pubspec.yaml`:
-
-```yaml
-dependencies:
-  fletch: ^2.1.0
-```
-
-Then install dependencies:
-
 ```bash
-dart pub get
+dart pub add fletch
 ```
+
+This adds the latest version to your `pubspec.yaml` and runs `dart pub get` automatically.
 
 ## Create Your First Server
 

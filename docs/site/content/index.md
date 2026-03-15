@@ -12,13 +12,8 @@ Express-style developer ergonomics, Dart performance, and production-first defau
 
 ## Install
 
-```yaml
-dependencies:
-  fletch: ^1.0.0
-```
-
 ```bash
-dart pub get
+dart pub add fletch
 ```
 
 ## Minimal app
