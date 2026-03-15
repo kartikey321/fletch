@@ -160,6 +160,9 @@ class _IsolatedRouterDelegate implements RouterInterface {
   }
 
   @override
+  void clear() => container.router.clear();
+
+  @override
   RouteMatch? findRoute(String method, String path) {
     final delegateMatch = container.router.findRoute(method, path);
     if (delegateMatch == null) {
@@ -174,9 +177,10 @@ class _IsolatedRouterDelegate implements RouterInterface {
         // the parent Session object which already has its store reference.
         final scopedRequest = Request(
           parentRequest.httpRequest,
-          parentRequest.session, // Share session (already has store)
+          parentRequest.session.id, // ignored — existingSession takes priority
           parentRequest.requestId,
           container.container,
+          existingSession: parentRequest.session, // share loaded session
           sessionSigner: parentRequest.sessionSigner,
         );
 

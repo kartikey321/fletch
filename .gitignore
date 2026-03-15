@@ -1,1 +1,6 @@
 fletch_copy/
+packages/fletch/benchmark/dartmark/
+coverage/
+.idea/
+.dart_tool/
+apps/fletch_bench/drafts/

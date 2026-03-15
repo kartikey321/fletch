@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:fletch/fletch.dart';
 import 'package:fletch/src/middleware/cookies_parser.dart';
 
 /// Common HTTP method constants used across the framework.
+// ignore_for_file: constant_identifier_names
 class RequestTypes {
   static const String GET = 'GET';
   static const String POST = 'POST';
@@ -73,8 +75,15 @@ class Fletch extends BaseContainer {
   /// Maximum size in bytes for file uploads (default: 100MB).
   final int maxFileSize;
 
-  /// Maximum time a request handler can run before timeout (default: 30s).
-  final Duration requestTimeout;
+  /// Maximum time a request handler can run before timing out.
+  ///
+  /// Set to `null` to disable request timeouts entirely, which eliminates the
+  /// per-request `Timer` allocation and is recommended for maximum throughput
+  /// in environments that have their own timeout enforcement (load balancers,
+  /// reverse proxies, etc.).
+  ///
+  /// Default: 30 seconds.
+  final Duration? requestTimeout;
 
   /// Maximum time to wait for active requests during shutdown (default: 30s).
   final Duration shutdownTimeout;
@@ -152,8 +161,9 @@ class Fletch extends BaseContainer {
     bool useCookieParser = true,
     this.maxBodySize = 10 * 1024 * 1024, // 10MB
     this.maxFileSize = 100 * 1024 * 1024, // 100MB
-    this.requestTimeout = const Duration(seconds: 30),
+    this.requestTimeout = const Duration(seconds: 30), // null = no timeout
     this.shutdownTimeout = const Duration(seconds: 30),
+    super.debug = false,
     this.sessionSecret,
     SessionStore? sessionStore,
     super.secureCookies,
@@ -169,6 +179,29 @@ class Fletch extends BaseContainer {
     if (useCookieParser) {
       use(CookieParser.middleware());
     }
+  }
+
+  /// Registers a [factory] that re-registers all routes and also exposes
+  /// the `ext.fletch.reassemble` VM service extension so the dev tools can
+  /// trigger a route reassembly after each hot reload.
+  ///
+  /// ```dart
+  /// void main() async {
+  ///   final app = Fletch();
+  ///   app.hotReload(() => registerRoutes(app));
+  ///   registerRoutes(app);
+  ///   await app.listen(3000);
+  /// }
+  /// ```
+  @override
+  void hotReload(void Function() factory) {
+    super.hotReload(factory);
+    developer.registerExtension('ext.fletch.reassemble',
+        (method, params) async {
+      reassemble();
+      return developer.ServiceExtensionResponse.result(
+          '{"type":"@Event","kind":"Reassembled"}');
+    });
   }
 
   /// Mounts an [IsolatedContainer] at the specified [prefix] path.
@@ -434,6 +467,31 @@ class Fletch extends BaseContainer {
   /// Builds a rate limiter middleware backed by [store] (or an in-memory
   /// default). Requests exceeding [maxRequests] within [window] receive a 429
   /// response. Customize [keyGenerator] to throttle by user/token/etc.
+  ///
+  /// ## Reverse-proxy deployments
+  ///
+  /// The default key is the **TCP-layer remote IP**. Behind a reverse proxy
+  /// (nginx, Cloudflare, AWS ALB) every request arrives from the proxy's IP,
+  /// collapsing all real clients into a single bucket.
+  ///
+  /// Supply a [keyGenerator] that reads a trusted forwarded-IP header instead:
+  ///
+  /// ```dart
+  /// app.use(app.rateLimiter(
+  ///   keyGenerator: (req) {
+  ///     // Only read this header when you control the proxy and it strips
+  ///     // any client-supplied X-Forwarded-For before adding its own.
+  ///     final forwarded = req.headers.value('x-forwarded-for');
+  ///     // Take the first IP in the chain (original client).
+  ///     return forwarded?.split(',').first.trim()
+  ///         ?? req.httpRequest.connectionInfo?.remoteAddress.address
+  ///         ?? 'unknown';
+  ///   },
+  /// ));
+  /// ```
+  ///
+  /// **Warning**: never trust `X-Forwarded-For` unless your proxy is
+  /// configured to strip the header from incoming client requests first.
   MiddlewareHandler rateLimiter({
     int maxRequests = 100,
     Duration window = const Duration(minutes: 1),
@@ -554,10 +612,15 @@ class Fletch extends BaseContainer {
     _activeRequests++;
 
     try {
-      await handleRequest(httpRequest).timeout(
-        requestTimeout,
-        onTimeout: () => throw HttpError(408, 'Request Timeout'),
-      );
+      final future = handleRequest(httpRequest);
+      if (requestTimeout != null) {
+        await future.timeout(
+          requestTimeout!,
+          onTimeout: () => throw HttpError(408, 'Request Timeout'),
+        );
+      } else {
+        await future;
+      }
     } catch (error, stackTrace) {
       await _safelySendErrorResponse(httpRequest, error, stackTrace);
     } finally {
@@ -579,11 +642,16 @@ class Fletch extends BaseContainer {
     try {
       final statusCode = error is HttpError ? error.statusCode : 500;
 
+      final errorMessage = error is HttpError
+          ? error.message
+          : debug
+              ? error.toString()
+              : 'Internal Server Error';
       httpRequest.response
         ..statusCode = statusCode
         ..headers.contentType = ContentType.json
         ..write(jsonEncode({
-          'error': error.toString(),
+          'error': errorMessage,
           'statusCode': statusCode,
         }));
 
@@ -605,8 +673,8 @@ class Fletch extends BaseContainer {
     if (maxFileSize <= 0) {
       throw ArgumentError('maxFileSize must be positive');
     }
-    if (requestTimeout <= Duration.zero) {
-      throw ArgumentError('requestTimeout must be positive');
+    if (requestTimeout != null && requestTimeout! <= Duration.zero) {
+      throw ArgumentError('requestTimeout must be positive (or null to disable)');
     }
     if (shutdownTimeout <= Duration.zero) {
       throw ArgumentError('shutdownTimeout must be positive');

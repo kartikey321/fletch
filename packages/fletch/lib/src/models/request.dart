@@ -1,12 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:fletch/fletch.dart';
 import 'package:get_it/get_it.dart';
+import 'package:meta/meta.dart';
 import 'package:mime/mime.dart';
-import 'package:uuid/uuid.dart';
+
+final _secureRandom = Random.secure();
+
+String _randomToken(int byteLength) {
+  final bytes =
+      List<int>.generate(byteLength, (_) => _secureRandom.nextInt(256));
+  return base64Url.encode(bytes).replaceAll('=', '');
+}
 
 /// Represents an incoming HTTP request with convenient accessors for
 /// common data like headers, query parameters, request body, and session.
@@ -36,8 +45,12 @@ class Request {
   /// The underlying Dart HttpRequest.
   final HttpRequest httpRequest;
 
-  /// Unique identifier for this request (UUID v4).
-  final String requestId;
+  /// Unique identifier for this request.
+  ///
+  /// Echoes the incoming `x-request-id` / `x-correlation-id` header when
+  /// present; otherwise a random `req_*` token generated on first access.
+  String get requestId => _requestId ??= _generateRequestId();
+  String? _requestId;
 
   /// Path parameters extracted from the route pattern.
   ///
@@ -49,7 +62,8 @@ class Request {
   /// For URL `/search?q=dart&page=2`:
   /// - `query['q']` returns `'dart'`
   /// - `query['page']` returns `'2'`
-  late final Map<String, String> query;
+  Map<String, String>? _query;
+  Map<String, String> get query => _query ??= httpRequest.uri.queryParameters;
 
   /// Session for this request.
   ///
@@ -58,7 +72,28 @@ class Request {
   /// req.session['key'] = 'value';
   /// final value = req.session['key'];
   /// ```
-  final Session session;
+  ///
+  /// The session is lazy: no session cookie is emitted and no store I/O
+  /// occurs unless this getter is actually accessed during the request.
+  /// Returns the session for this request.
+  ///
+  /// The [Session] object (and its internal data map) is created on first
+  /// access — routes that never read or write session data pay zero cost.
+  Session get session {
+    sessionTouched = true;
+    if (_sessionInstance != null) return _sessionInstance!;
+    // Generate a new session ID only on first access — routes that never
+    // touch the session pay zero Random.secure() cost.
+    _sessionId ??= _generateSessionId();
+    return _sessionInstance = Session(_sessionId!, store: _sessionStoreRef);
+  }
+
+  // Backing state for the lazy session.
+  // null for brand-new sessions until first access; non-null for returning
+  // visitors (ID extracted from the verified cookie).
+  String? _sessionId;
+  final SessionStore? _sessionStoreRef;
+  Session? _sessionInstance;
 
   /// Dependency injection container for this request.
   final GetIt container;
@@ -78,21 +113,45 @@ class Request {
   Map<String, dynamic>? _formDataCache;
   final bool _isSessionNew;
 
+  /// `true` once [session] has been accessed during this request lifecycle.
+  /// Used by the framework to skip session I/O on routes that never touch it.
+  /// Framework-internal — do not use in application code.
+  @internal
+  bool sessionTouched = false;
+
+  /// Loads the session from the store without marking [sessionTouched].
+  /// Used by the framework for returning-visitor pre-load; does not count
+  /// as application code accessing the session.
+  @internal
+  Future<void> preloadSession() {
+    // Only called for returning visitors — _sessionId is always non-null here
+    // because it was extracted from the verified session cookie.
+    final s = _sessionInstance ??= Session(_sessionId!, store: _sessionStoreRef);
+    return s.load();
+  }
+
   /// Parsed cookies from the Cookie header.
   List<Cookie> cookies = [];
 
   Request(
     this.httpRequest,
-    this.session,
-    this.requestId,
+    String? sessionId,
+    String? requestId,
     this.container, {
     bool isSessionNew = false,
+    SessionStore? sessionStore,
+    /// Provide a pre-built [Session] to share across scoped sub-requests
+    /// (e.g. IsolatedContainer). When given, [sessionId] and [sessionStore]
+    /// are ignored for session construction.
+    Session? existingSession,
     this.maxBodySize = 10 * 1024 * 1024,
     this.maxFileSize = 100 * 1024 * 1024,
     this.sessionSigner,
-  }) : _isSessionNew = isSessionNew {
-    query = httpRequest.uri.queryParameters;
-  }
+  })  : _isSessionNew = isSessionNew,
+        _sessionId = existingSession?.id ?? sessionId,
+        _requestId = requestId,
+        _sessionStoreRef = sessionStore,
+        _sessionInstance = existingSession;
 
   /// HTTP method (GET, POST, PUT, DELETE, etc.).
   String get method => httpRequest.method;
@@ -191,59 +250,68 @@ class Request {
     SessionSigner? sessionSigner,
     SessionStore? sessionStore,
   }) {
-    Cookie? sessionCookie;
+    String? rawSessionId;
+    String? sessionId;
     bool isSessionNew = false;
-    String sessionId;
+    
+    // Extract session cookie by splitting on ';' and checking each part
+    // for an exact name match — prevents prefix-confusion attacks where a
+    // cookie like "evilfletch.sid=x;fletch.sid=good" would otherwise return
+    // the wrong value with a simple indexOf approach.
+    final cookieHeaders = httpRequest.headers[HttpHeaders.cookieHeader];
+    outer:
+    if (cookieHeaders != null) {
+      for (final header in cookieHeaders) {
+        for (final part in header.split(';')) {
+          final token = part.trimLeft();
+          final eqIdx = token.indexOf('=');
+          if (eqIdx <= 0) continue;
+          if (token.substring(0, eqIdx) == _sessionCookieName) {
+            rawSessionId = token.substring(eqIdx + 1);
+            break outer;
+          }
+        }
+      }
+    }
 
-    try {
-      sessionCookie = httpRequest.cookies
-          .firstWhere((cookie) => cookie.name == _sessionCookieName);
-
-      // Verify signed session cookie if signer is available
+    if (rawSessionId != null) {
       if (sessionSigner != null) {
-        final verifiedId = sessionSigner.verify(sessionCookie.value);
+        final verifiedId = sessionSigner.verify(rawSessionId);
         if (verifiedId != null) {
           sessionId = verifiedId;
         } else {
-          // Invalid signature - generate new session
-          sessionId = _generateSessionId();
+          // Invalid signature — treat as new session; ID generated lazily.
           isSessionNew = true;
         }
       } else {
-        // No signing - use cookie value as-is
-        sessionId = sessionCookie.value;
+        sessionId = rawSessionId;
       }
-    } on StateError {
-      // No session cookie found - create new session
-      sessionId = _generateSessionId();
+    } else {
+      // No cookie — new session; ID generated lazily on first req.session access.
       isSessionNew = true;
     }
 
-    final session = Session(sessionId, store: sessionStore);
-    final requestId = httpRequest.headers.value('x-request-id') ??
-        httpRequest.headers.value('x-correlation-id') ??
-        _generateRequestId();
+    // Both session ID and request ID are lazy: generated only when first
+    // accessed so routes that touch neither pay zero Random.secure() cost.
+    final incomingRequestId = httpRequest.headers.value('x-request-id') ??
+        httpRequest.headers.value('x-correlation-id');
 
     return Request(
       httpRequest,
-      session,
-      requestId,
+      sessionId,
+      incomingRequestId,
       container,
       isSessionNew: isSessionNew,
+      sessionStore: sessionStore,
       maxBodySize: maxBodySize,
       maxFileSize: maxFileSize,
       sessionSigner: sessionSigner,
     );
   }
 
-  /// Generate a cryptographically secure session ID using UUID v4
-  static String _generateSessionId() {
-    return const Uuid().v4();
-  }
+  static String _generateSessionId() => 'ses_${_randomToken(24)}';
 
-  static String _generateRequestId() {
-    return const Uuid().v4();
-  }
+  static String _generateRequestId() => 'req_${_randomToken(12)}';
 
   /// Indicates whether a fresh session identifier was generated for this
   /// request (and therefore needs to be persisted back via response cookies).
@@ -404,16 +472,53 @@ class Request {
 /// // Session is automatically saved after request completes
 /// ```
 class Session {
-  final String id;
+  String _id;
   final SessionStore? _store;
   Map<String, dynamic> _data = {};
   bool _isDirty = false;
   bool _isLoaded = false;
+  bool _wasRegenerated = false;
 
-  Session(this.id, {SessionStore? store}) : _store = store {
+  /// The current session identifier.
+  ///
+  /// Changes after a call to [regenerate].
+  String get id => _id;
+
+  /// Whether [regenerate] has been called on this session.
+  bool get wasRegenerated => _wasRegenerated;
+
+  Session(String id, {SessionStore? store})
+      : _id = id,
+        _store = store {
     // If no store, mark as loaded since there's nothing to load
     if (store == null) {
       _isLoaded = true;
+    }
+  }
+
+  /// Replaces the session ID with a new cryptographically-random value and
+  /// destroys the old session record in the store.
+  ///
+  /// Call this after a privilege change (e.g. successful login) to prevent
+  /// [session fixation attacks](https://owasp.org/www-community/attacks/Session_fixation).
+  ///
+  /// ```dart
+  /// app.post('/login', (req, res) async {
+  ///   final ok = await validateCredentials(req);
+  ///   if (ok) {
+  ///     await req.session.regenerate(); // invalidate old ID
+  ///     req.session['userId'] = user.id;
+  ///   }
+  /// });
+  /// ```
+  Future<void> regenerate() async {
+    if (_wasRegenerated) return; // idempotent
+    final oldId = _id;
+    _id = _randomToken(24);
+    _wasRegenerated = true;
+    _isDirty = true;
+    if (_store != null) {
+      await _store.destroy(oldId);
     }
   }
 
@@ -513,4 +618,28 @@ class _FormDataPayload {
 
   bool get hasFiles => files.isNotEmpty;
   bool get isEmpty => fields.isEmpty && files.isEmpty;
+}
+
+/// Safety helpers for uploaded files.
+///
+/// Always prefer [sanitizedFilename] over [MultipartFile.filename] when
+/// constructing file-system paths — the raw value is attacker-controlled and
+/// may contain path-traversal sequences such as `../../etc/passwd`.
+extension MultipartFileExtension on MultipartFile {
+  /// Returns the uploaded filename with all path components stripped.
+  ///
+  /// Safe to use when building file-system paths.  `null` when no filename
+  /// was supplied by the client.
+  ///
+  /// ```dart
+  /// final safe = file.sanitizedFilename; // 'avatar.png', never '../secret'
+  /// ```
+  String? get sanitizedFilename {
+    final name = filename;
+    if (name == null) return null;
+    // Split on both / and \ to neutralise Windows-style traversal sequences.
+    final parts = name.split(RegExp(r'[/\\]'));
+    final last = parts.lastWhere((p) => p.isNotEmpty, orElse: () => '');
+    return last.isEmpty ? null : last;
+  }
 }

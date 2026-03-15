@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── 1. Static analysis ────────────────────────────────────────────────────────
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install dependencies
+        working-directory: packages/fletch
+        run: dart pub get
+
+      - name: Analyze
+        working-directory: packages/fletch
+        run: dart analyze --fatal-infos
+
+  # ── 2. Tests + coverage enforcement ──────────────────────────────────────────
+  test:
+    name: Test & Coverage
+    needs: analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install dependencies
+        working-directory: packages/fletch
+        run: dart pub get
+
+      - name: Run tests with coverage
+        working-directory: packages/fletch
+        run: dart test --coverage=coverage
+
+      - name: Format coverage to lcov
+        working-directory: packages/fletch
+        run: |
+          dart pub global activate coverage
+          dart pub global run coverage:format_coverage \
+            --lcov \
+            --in=coverage \
+            --out=coverage/lcov.info \
+            --packages=.dart_tool/package_config.json \
+            --report-on=lib
+
+      - name: Enforce coverage threshold (≥ 90%)
+        working-directory: packages/fletch
+        run: |
+          COVERAGE=$(awk -F: '/^LF/{lf+=$2} /^LH/{lh+=$2} END{printf "%.1f", lh*100/lf}' coverage/lcov.info)
+          echo "Coverage: ${COVERAGE}%"
+          if awk "BEGIN{exit !(${COVERAGE} < 90)}"; then
+            echo "::error::Coverage ${COVERAGE}% is below the required 90% threshold"
+            exit 1
+          fi
+          echo "Coverage ${COVERAGE}% meets the 90% threshold"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: packages/fletch/coverage/lcov.info
+          fail_ci_if_error: false

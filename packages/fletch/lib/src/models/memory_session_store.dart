@@ -37,6 +37,7 @@ class MemorySessionStore implements SessionStore {
   final Map<String, _SessionEntry> _sessions = {};
   final Duration defaultTTL;
   final Duration _cleanupInterval;
+  final int maxSessions;
   Timer? _cleanupTimer;
 
   /// Creates a memory-backed session store.
@@ -44,9 +45,13 @@ class MemorySessionStore implements SessionStore {
   /// Parameters:
   /// - [defaultTTL]: Default session lifetime (default: 24 hours)
   /// - [cleanupInterval]: How often to clean expired sessions (default: 10 minutes)
+  /// - [maxSessions]: Maximum live sessions kept in memory (default: 10,000).
+  ///   When the limit is reached, the oldest sessions are evicted to prevent
+  ///   unbounded memory growth under sustained traffic.
   MemorySessionStore({
     this.defaultTTL = const Duration(hours: 24),
     Duration cleanupInterval = const Duration(minutes: 10),
+    this.maxSessions = 10000,
   }) : _cleanupInterval = cleanupInterval {
     _startCleanup();
   }
@@ -74,6 +79,13 @@ class MemorySessionStore implements SessionStore {
     Duration? ttl,
   }) async {
     final expiresAt = DateTime.now().add(ttl ?? defaultTTL);
+
+    // Evict oldest entries when at capacity (before inserting a new one).
+    if (!_sessions.containsKey(sessionId) &&
+        _sessions.length >= maxSessions) {
+      // Dart Maps are insertion-ordered: the first key is the oldest.
+      _sessions.remove(_sessions.keys.first);
+    }
 
     _sessions[sessionId] = _SessionEntry(
       data: Map<String, dynamic>.from(data), // Store a copy

@@ -32,8 +32,8 @@ void main() async {
         {'status': 'healthy', 'timestamp': DateTime.now().toIso8601String()});
   });
 
-  await app.listen(3005);
-  print('🚀 Benchmark server running on http://localhost:3000');
+  await app.listen(3008);
+  print('🚀 Benchmark server running on http://localhost:3008');
   print('');
   print('Available endpoints:');
   print('  GET  /           - Simple hello message');
@@ -42,5 +42,6 @@ void main() async {
   print('  GET  /health     - Health check');
   print('');
   print('Test with:');
-  print('  dart run bin/load_test.dart http://localhost:3000 1000 10');
+  print('  dart run bin/load_test.dart http://localhost:3008 1000 10');
 }
+

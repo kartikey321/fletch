@@ -15,10 +15,17 @@ abstract class BaseContainer {
   final List<MiddlewareHandler> _middleware = [];
   final GetIt container;
   final bool secureCookies;
+
+  /// When `true`, full exception details (stack traces, internal messages) are
+  /// included in error responses.  Keep `false` (the default) in production
+  /// to avoid leaking internal implementation details to clients.
+  final bool debug;
+
   final SessionStore? sessionStore;
   final SessionSigner? sessionSigner;
   ErrorHandler? _errorHandler;
   late final Logger logger;
+  void Function()? _routeFactory;
 
   /// Creates a container with optional overrides for router and dependency
   /// scope.
@@ -27,6 +34,7 @@ abstract class BaseContainer {
     GetIt? container,
     Logger? logger,
     this.secureCookies = true,
+    this.debug = false,
     this.sessionStore,
     this.sessionSigner,
   })  : router = router ?? RadixRouter(),
@@ -108,6 +116,34 @@ abstract class BaseContainer {
     container.unregister<T>();
   }
 
+  /// Registers a [factory] callback that re-registers all routes.
+  ///
+  /// Call this in your server's `main()` before `listen()` to enable
+  /// Phoenix-style hot reload: after each successful VM source reload,
+  /// the dev tools will invoke [reassemble] which clears the router and
+  /// re-calls [factory] so updated named function references take effect.
+  ///
+  /// ```dart
+  /// void main() async {
+  ///   final app = Fletch();
+  ///   app.hotReload(() => registerRoutes(app));
+  ///   registerRoutes(app);
+  ///   await app.listen(3000);
+  /// }
+  /// ```
+  void hotReload(void Function() factory) {
+    _routeFactory = factory;
+  }
+
+  /// Clears all registered routes and re-registers them via the factory
+  /// set by [hotReload]. Called by the VM service extension after a
+  /// successful hot reload so updated named handler bodies take effect.
+  void reassemble() {
+    if (_routeFactory == null) return;
+    router.clear();
+    _routeFactory!();
+  }
+
   /// Installs a global error handler.
   void setErrorHandler(ErrorHandler handler) {
     _errorHandler = handler;
@@ -116,6 +152,28 @@ abstract class BaseContainer {
   @protected
   RequestHandler wrapWithMiddleware(
       RequestHandler handler, List<MiddlewareHandler> routeMiddleware) {
+    // Fast path: no route-level middleware. Check global middleware at call
+    // time (it can be added after route registration via app.use()).
+    if (routeMiddleware.isEmpty) {
+      return (Request request, Response response) async {
+        if (_middleware.isEmpty) {
+          // Zero-middleware hot path — call handler directly, no closures.
+          return handler(request, response);
+        }
+        // Global middleware exists; run the chain.
+        int index = 0;
+        Future<void> next() async {
+          if (index < _middleware.length) {
+            await _middleware[index++](request, response, next);
+          } else {
+            await handler(request, response);
+          }
+        }
+        await next();
+      };
+    }
+
+    // Route has its own middleware — full chain.
     return (Request request, Response response) async {
       int globalIndex = 0;
       int routeIndex = 0;
@@ -207,35 +265,25 @@ abstract class BaseContainer {
   /// [response]. If a route does not complete the response, it is sent here.
   @protected
   Future<void> processRequest(Request request, Response response) async {
-    // Load session data from store (with error handling)
-    try {
-      await request.session.load();
-    } catch (e, stack) {
-      logger.e('Failed to load session', error: e, stackTrace: stack);
-      // Continue with empty session rather than crashing request
-    }
-
-    // Set up session cookie for new sessions
-    if (request.isNewSession &&
-        !response.hasCookie(Request.sessionCookieName)) {
-      // Determine session cookie value (signed or plain)
-      String cookieValue = request.session.id;
-      if (request.sessionSigner != null) {
-        cookieValue = request.sessionSigner!.sign(request.session.id);
+    // Only eagerly load session for returning visitors — new sessions have no
+    // stored data so the load is always a no-op and we can skip the I/O.
+    if (!request.isNewSession) {
+      try {
+        await request.preloadSession(); // bypasses sessionTouched flag
+      } catch (e, stack) {
+        logger.e('Failed to load session', error: e, stackTrace: stack);
+        // Continue with empty session rather than crashing request
       }
-
-      // Set session cookie with configured security settings
-      response.cookie(
-        Request.sessionCookieName,
-        cookieValue,
-        secure: secureCookies,
-        httpOnly: true,
-        sameSite: SameSite.lax,
-      );
     }
 
-    // Attach request correlation id to response for tracing
-    response.setHeader('X-Request-Id', request.requestId);
+    // Echo correlation ID only when the client sent one — free for benchmark
+    // traffic that omits the header, still works for tracing in production.
+    final incomingId =
+        request.httpRequest.headers.value('x-request-id') ??
+        request.httpRequest.headers.value('x-correlation-id');
+    if (incomingId != null) {
+      response.setHeader('X-Request-Id', request.requestId);
+    }
 
     try {
       final resolvedPath = resolveRoutePath(request);
@@ -250,12 +298,36 @@ abstract class BaseContainer {
       await handleError(error, request, response, stackTrace);
     }
 
-    // Save session data to store if modified (with error handling)
-    try {
-      await request.session.save();
-    } catch (e, stack) {
-      logger.e('Failed to save session', error: e, stackTrace: stack);
-      // Log error but don't fail the request
+    // Only perform session persistence if the handler (or its middleware)
+    // actually touched req.session — skips all cookie + store work on routes
+    // that never need a session (e.g. health checks, public API endpoints).
+    if (request.sessionTouched) {
+      final session = request.session;
+
+      // Emit Set-Cookie when: (a) brand-new session, or (b) session was
+      // regenerated (new ID after privilege escalation, e.g. login).
+      final needsCookie = (request.isNewSession || session.wasRegenerated) &&
+          !response.hasCookie(Request.sessionCookieName);
+      if (needsCookie) {
+        String cookieValue = session.id;
+        if (request.sessionSigner != null) {
+          cookieValue = request.sessionSigner!.sign(session.id);
+        }
+        response.cookie(
+          Request.sessionCookieName,
+          cookieValue,
+          secure: secureCookies,
+          httpOnly: true,
+          sameSite: SameSite.lax,
+        );
+      }
+
+      // Save session data to store if modified
+      try {
+        await session.save();
+      } catch (e, stack) {
+        logger.e('Failed to save session', error: e, stackTrace: stack);
+      }
     }
 
     if (!response.isSent) {
@@ -307,8 +379,11 @@ abstract class BaseContainer {
       response.json({'error': error.message, 'data': error.data});
     } else {
       response.setStatus(HttpStatus.internalServerError);
-      response.json(
-          {'error': 'Internal Server Error', 'message': error.toString()});
+      final body = <String, dynamic>{'error': 'Internal Server Error'};
+      // Only expose internal details in debug mode — in production, leaking
+      // exception messages can reveal DB connection strings, file paths, etc.
+      if (debug) body['message'] = error.toString();
+      response.json(body);
     }
   }
 
@@ -316,7 +391,7 @@ abstract class BaseContainer {
   Future<void> onDispose() async {
     // Dispose session store if provided
     await sessionStore?.dispose();
-    container.reset();
+    await container.reset();
   }
 
   static Logger _defaultLogger() {
