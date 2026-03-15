@@ -82,14 +82,16 @@ Good for development, not for production:
 ```dart
 final app = Fletch(
   sessionSecret: 'secret',
-  sessionStore: MemorySessionStore(), // Default
+  sessionStore: MemorySessionStore(
+    maxSessions: 10000, // evicts oldest when limit reached (default)
+  ),
 );
 ```
 
 **Limitations:**
 - Data lost on server restart
 - Doesn't work with multiple server instances
-- Memory usage grows over time
+- Bounded to `maxSessions` entries (oldest evicted when full)
 
 ### Custom Store
 
@@ -190,16 +192,19 @@ void main() async {
     final body = await req.body;
     final email = body['email'];
     final password = body['password'];
-    
+
     // Validate credentials (example)
     if (email == 'user@example.com' && password == 'password') {
+      // Regenerate session ID to prevent session fixation
+      await req.session.regenerate();
+
       req.session['userId'] = '123';
       req.session['email'] = email;
       req.session['loginAt'] = DateTime.now().toIso8601String();
-      
+
       return res.json({'success': true});
     }
-    
+
     res.status(401).json({'error': 'Invalid credentials'});
   });
   
@@ -272,16 +277,27 @@ final app = Fletch(
 
 ### 3. Regenerate Session on Login
 
+Always call `session.regenerate()` after a successful login. This destroys the old session ID and issues a fresh one, preventing [session fixation attacks](https://owasp.org/www-community/attacks/Session_fixation) where an attacker pre-sets a known session ID before the victim authenticates.
+
 ```dart
 app.post('/login', (req, res) async {
-  // Clear old session
-  req.session.clear();
-  
-  // Create new session
-  req.session['userId'] = userId;
-  req.session['createdAt'] = DateTime.now().toIso8601String();
+  final body = await req.body;
+  final ok = await validateCredentials(body['email'], body['password']);
+
+  if (ok) {
+    // Invalidate the pre-auth session ID and generate a new one
+    await req.session.regenerate();
+
+    req.session['userId'] = userId;
+    req.session['loginAt'] = DateTime.now().toIso8601String();
+    return res.json({'success': true});
+  }
+
+  res.status(401).json({'error': 'Invalid credentials'});
 });
 ```
+
+`regenerate()` is a no-op if called more than once in the same request.
 
 ### 4. Implement Session Timeout
 

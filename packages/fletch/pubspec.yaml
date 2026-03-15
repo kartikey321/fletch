@@ -2,7 +2,7 @@ name: fletch
 description: >-
   A fast, Express-inspired HTTP framework for Dart. Build production-ready REST APIs 
   with built-in sessions, CORS, rate limiting, and middleware support.
-version: 2.1.0
+version: 2.2.0
 repository: https://github.com/kartikey321/fletch
 homepage: https://docs.fletch.mahawarkartikey.in
 documentation: https://docs.fletch.mahawarkartikey.in
@@ -35,11 +35,3 @@ dev_dependencies:
   lints: ^6.0.0
   test: ^1.24.0
 
-# Example files for pub.dev
-screenshots:
-  - description: 'Basic server example with routing and middleware'
-    path: example/fletch_example.dart
-  - description: 'Session security demo with HMAC signing'
-    path: example/session_security_demo.dart
-  - description: 'Session management README'
-    path: example/SESSION_DEMO_README.md

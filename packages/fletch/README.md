@@ -23,7 +23,7 @@ lightweight and dependency-free beyond `GetIt`.
 If you're coming from **Express.js** or **Node.js**, Fletch will feel instantly familiar:
 
 - ✅ **Express-like API** - `app.get()`, `app.post()`, middleware, it's all here
-- ⚡ **Fast** - Radix-tree routing, minimal overhead
+- ⚡ **Fast** - 44,000+ RPS, fastest Dart web framework (~10% behind raw `dart:io`)
 - 🔒 **Secure by default** - HMAC-signed sessions, CORS, rate limiting built-in
 - 📡 **Real-time** - Built-in SSE and streaming support
 - 🎯 **Production-ready** - Graceful shutdown, request timeouts, error handling

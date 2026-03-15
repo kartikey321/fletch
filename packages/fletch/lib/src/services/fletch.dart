@@ -119,8 +119,16 @@ class Fletch extends BaseContainer {
   /// - [maxFileSize]: Maximum file upload size (default: 100MB).
   ///
   /// - [requestTimeout]: Handler execution timeout (default: 30s).
+  ///   Set to `null` to disable entirely — eliminates the per-request `Timer`
+  ///   allocation and is recommended behind load balancers that enforce their
+  ///   own upstream timeout.
   ///
   /// - [shutdownTimeout]: Graceful shutdown wait time (default: 30s).
+  ///
+  /// - [debug]: When `true`, full exception details are included in error
+  ///   responses. Useful during development. **Never enable in production** —
+  ///   exception strings can expose connection strings, file paths, and other
+  ///   sensitive internal details. Default: `false`.
   ///
   /// - [useCookieParser]: Auto-parse Cookie header (default: true).
   ///

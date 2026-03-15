@@ -1,0 +1,17 @@
+# Claude Code settings
+.claude/
+
+# Test artifacts
+test_output.txt
+coverage/
+mutation-reports/
+
+# Backup / draft files
+README_BACKUP.md
+
+# IDE / build
+*.iml
+.dart_tool/
+
+# Benchmark internals (bin/ and pubspec are still included for reference)
+benchmark/dartmark/

@@ -256,8 +256,51 @@ app.use(app.cors(
 ));
 ```
 
+## Rate Limiting
+
+Protect your API from abuse by adding rate limiting middleware:
+
+```dart
+app.use(app.rateLimiter(
+  maxRequests: 100,
+  window: Duration(minutes: 1),
+));
+```
+
+### Rate limiting behind a reverse proxy
+
+The default key is the TCP-layer remote IP. Behind nginx, AWS ALB, or Cloudflare, every request arrives from the proxy's IP — collapsing all real clients into a single bucket and making rate limiting useless.
+
+Supply a `keyGenerator` that reads the forwarded IP instead:
+
+```dart
+app.use(app.rateLimiter(
+  maxRequests: 100,
+  window: Duration(minutes: 1),
+  keyGenerator: (req) {
+    // Only trust this header if your proxy strips any
+    // client-supplied X-Forwarded-For before adding its own.
+    final forwarded = req.headers.value('x-forwarded-for');
+    return forwarded?.split(',').first.trim()
+        ?? req.httpRequest.connectionInfo?.remoteAddress.address
+        ?? 'unknown';
+  },
+));
+```
+
+> **Warning:** Never trust `X-Forwarded-For` unless your proxy is configured to strip the header from incoming client requests first. An attacker can spoof any IP by setting the header themselves, bypassing rate limits entirely.
+
+You can also key by authenticated user to rate-limit per account rather than per IP:
+
+```dart
+app.use(app.rateLimiter(
+  maxRequests: 1000,
+  window: Duration(minutes: 1),
+  keyGenerator: (req) => req.session['userId'] as String? ?? 'anonymous',
+));
+```
+
 ## Next Steps
 
-- [Rate Limiting](/security/rate-limiting) - Protect against abuse
 - [Sessions](/core-concepts/sessions) - Manage authenticated users
 - [Best Practices](/security/best-practices) - Security guidelines
