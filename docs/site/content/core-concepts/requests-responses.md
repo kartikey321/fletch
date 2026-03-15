@@ -54,7 +54,12 @@ app.post('/upload', (req, res) async {
   
   if (files != null) {
     final file = files.first;
-    print('Filename: ${file.filename}');
+
+    // Always use sanitizedFilename when writing to disk.
+    // file.filename is attacker-controlled and may contain
+    // path-traversal sequences like ../../etc/passwd
+    final name = file.sanitizedFilename;
+    print('Filename: $name');        // 'avatar.png', never '../secret'
     print('Size: ${file.length} bytes');
   }
 });

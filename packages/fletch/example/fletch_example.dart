@@ -45,7 +45,7 @@ Future<void> main() async {
 
   final port = int.parse(Platform.environment['PORT'] ?? '8080');
   await app.listen(port);
-  print('dart_express example running on http://localhost:$port');
+  print('Fletch example running on http://localhost:$port');
 }
 
 class UsersController extends Controller {

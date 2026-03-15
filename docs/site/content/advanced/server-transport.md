@@ -163,6 +163,20 @@ Key takeaways:
 | Testing / custom lifecycle | `app.serveWith(server)` |
 | Lower tail latency, single thread | `serveWith(NativeHttpServer.bind(...))` |
 
+## Performance tip: disable request timeouts behind a proxy
+
+By default, Fletch sets a 30-second handler timeout and allocates a `Timer` per request to enforce it. Behind a load balancer or reverse proxy (nginx, AWS ALB, Cloudflare) that already enforces its own upstream timeout, this allocation is redundant.
+
+Set `requestTimeout: null` to remove it entirely:
+
+```dart
+final app = Fletch(
+  requestTimeout: null, // rely on proxy/LB timeout
+);
+```
+
+This is one of the simplest single-line throughput wins available. Keep the default `30s` if you expose Fletch directly to the internet without a proxy.
+
 <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;margin:2rem 0;">
   <a href="/advanced/isolated-containers" style="display:flex;align-items:center;gap:0.4rem;text-decoration:none;color:inherit;">
     <span aria-hidden="true">‹</span>

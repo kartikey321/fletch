@@ -5,6 +5,85 @@ All notable changes to fletch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-03-15
+
+### Performance
+
+- **44,277 RPS** on Apple M-series — now the fastest Dart web framework, ~10% behind raw `dart:io`.
+- **Lazy session & request ID generation** — `Random.secure()` tokens are created only on first
+  access. Routes that never touch a session or request ID pay zero entropy cost.
+- **Session I/O gated on access** — session load, save, and `Set-Cookie` are skipped entirely for
+  routes that never read or write `req.session`.
+- **`requestTimeout: null`** — disables the per-request `Timer` allocation (~7k RPS gain).
+  Recommended behind load balancers that enforce their own upstream timeout.
+- **Static fused JSON encoder** — `JsonUtf8Encoder` reused across requests, eliminating a `String`
+  intermediate on every `res.json()` call.
+- **Lazy response headers map** — allocated only when headers are actually set.
+- **Zero-middleware fast path** — routes with no middleware bypass the closure chain entirely.
+- **Radix router** — static cached `RegExp`, combined method-check + regex + param extraction in a
+  single pass, early exit after static segment match.
+- **Lazy query param parsing** — parsed on first access, not on every request construction.
+
+### Added
+
+- **`session.regenerate()`** — invalidates the current session ID and issues a fresh one. Prevents
+  session fixation attacks. Should be called after every successful login. Idempotent within a
+  single request.
+- **`MultipartFile.sanitizedFilename`** — extension getter that strips all path components from
+  attacker-controlled upload filenames (`../../etc/passwd` → `passwd`). Use instead of
+  `file.filename` when writing to disk.
+- **`Fletch(debug:)`** — when `false` (default), error responses return only
+  `"Internal Server Error"`, preventing exception strings from leaking internal details. Set to
+  `true` during local development to see full messages.
+- **`MemorySessionStore(maxSessions:)`** — caps live session count (default 10,000). Oldest
+  entries are evicted on insert when the limit is reached, bounding memory under sustained traffic.
+- **CI: `.github/workflows/ci.yml`** — runs `dart analyze --fatal-infos`, full test suite,
+  enforces ≥90% line coverage, and uploads to Codecov on every push/PR to `main`.
+- **CI: `.github/workflows/mutation.yml`** — weekly `dart_mutant` mutation testing run with HTML,
+  JUnit, and AI reports as artifacts. Manually triggerable with configurable sample and threshold.
+
+### Security
+
+- **Session fixation** — `session.regenerate()` destroys the pre-auth session ID at login.
+- **Error redaction** — `debug: false` (default) prevents internal exception details from reaching
+  clients.
+- **Memory exhaustion** — `MemorySessionStore` now evicts oldest sessions at capacity instead of
+  growing without bound.
+- **Cookie prefix-confusion** — parser now splits on `;` and does exact name matching, so a cookie
+  like `evilapp.sid=x;fletch.sid=real` (no space) correctly resolves to `real`.
+- **File upload path traversal** — `sanitizedFilename` strips directory components from filenames.
+- **Rate limiter proxy bypass** — `keyGenerator` parameter documented with `X-Forwarded-For`
+  pattern and explicit warning against trusting unvalidated forwarded headers.
+
+### Fixed
+
+- Race condition in server lifecycle test: replaced fixed 50 ms delay with a `started` completer
+  so `close()` is only called once the handler is confirmed in-flight.
+- All `dart analyze --fatal-infos` warnings resolved (unused imports, unused variables,
+  duplicate field override, super-parameter style).
+- `benchmark/` folder excluded from static analysis to prevent dartmark noise locally.
+
+### Tests
+
+- **286 tests, 94.9% line coverage.**
+- New test files: `cors_test`, `error_handler_test`, `fletch_features_test`, `rate_limiter_test`,
+  `tls_test`, `security_test`, `list_router_test`, `response_test`, `coverage_gaps_test`,
+  `coverage_extension_test`.
+- TLS integration tests use runtime `openssl` cert generation — no private keys in source.
+- Mutation testing: 96.7% kill rate on security-critical paths.
+
+### Documentation
+
+- `configuration.md` — `debug`, `requestTimeout: null`, and `MemorySessionStore(maxSessions:)`
+  added to options table and dedicated sections.
+- `sessions.md` — `session.regenerate()` replaces the outdated `session.clear()` login pattern;
+  full auth example updated; `maxSessions` shown in `MemorySessionStore` example.
+- `requests-responses.md` — `sanitizedFilename` shown in the file upload section with path
+  traversal warning.
+- `server-transport.md` — `requestTimeout: null` performance tip added.
+- `security/cors.md` — new Rate Limiting section covering `keyGenerator`, `X-Forwarded-For`
+  pattern, and proxy spoofing warning.
+
 ## [2.1.0] - 2026-02-26
 
 ### Added
