@@ -172,18 +172,8 @@ class Fletch extends BaseContainer {
     }
   }
 
-  /// Registers a [factory] that re-registers all routes and also exposes
-  /// the `ext.fletch.reassemble` VM service extension so the dev tools can
-  /// trigger a route reassembly after each hot reload.
-  ///
-  /// ```dart
-  /// void main() async {
-  ///   final app = Fletch();
-  ///   app.hotReload(() => registerRoutes(app));
-  ///   registerRoutes(app);
-  ///   await app.listen(3000);
-  /// }
-  /// ```
+  /// Registers a [factory] for route re-registration and exposes the
+  /// `ext.fletch.reassemble` VM service extension for dev tools.
   @override
   void hotReload(void Function() factory) {
     super.hotReload(factory);
@@ -191,7 +181,8 @@ class Fletch extends BaseContainer {
         (method, params) async {
       reassemble();
       return developer.ServiceExtensionResponse.result(
-          '{"type":"@Event","kind":"Reassembled"}');
+        '{"type":"@Event","kind":"Reassembled"}',
+      );
     });
   }
 

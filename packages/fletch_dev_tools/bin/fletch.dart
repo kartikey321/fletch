@@ -20,6 +20,26 @@ Future<void> main(List<String> args) async {
     ..addOption('port', abbr: 'p', defaultsTo: '3003', help: 'Server port')
     ..addMultiOption('watch',
         abbr: 'w', defaultsTo: ['lib'], help: 'Directories to watch')
+    ..addFlag(
+      'verbose-compiler',
+      negatable: false,
+      help: 'Show verbose incremental compiler protocol and diagnostics',
+    )
+    ..addOption(
+      'compiler-max-recovery-attempts',
+      defaultsTo: '1',
+      help: 'Incremental compiler daemon recovery retries (>= 0)',
+    )
+    ..addOption(
+      'compiler-max-diagnostics',
+      defaultsTo: '80',
+      help: 'Max compiler diagnostics lines in normal mode (> 0)',
+    )
+    ..addOption(
+      'compiler-recovery-backoff-ms',
+      defaultsTo: '120',
+      help: 'Base backoff in ms between compiler recovery attempts (>= 0)',
+    )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   ArgResults results;
@@ -38,6 +58,22 @@ Future<void> main(List<String> args) async {
 
   final port = int.parse(results['port'] as String);
   final watchDirs = results['watch'] as List<String>;
+  final verboseCompiler = results['verbose-compiler'] as bool;
+  final compilerMaxRecoveryAttempts = _parseIntOption(
+    results,
+    optionName: 'compiler-max-recovery-attempts',
+    min: 0,
+  );
+  final compilerMaxDiagnostics = _parseIntOption(
+    results,
+    optionName: 'compiler-max-diagnostics',
+    min: 1,
+  );
+  final compilerRecoveryBackoffMs = _parseIntOption(
+    results,
+    optionName: 'compiler-recovery-backoff-ms',
+    min: 0,
+  );
 
   // Resolve entry point: explicit flag → auto-detect → error
   final entryPoint = _resolveEntryPoint(results['entry'] as String?);
@@ -54,6 +90,10 @@ Future<void> main(List<String> args) async {
     entryPoint: entryPoint,
     port: port,
     watchDirectories: watchDirs,
+    verboseCompiler: verboseCompiler,
+    compilerMaxDiagnostics: compilerMaxDiagnostics,
+    compilerMaxRecoveryAttempts: compilerMaxRecoveryAttempts,
+    compilerRecoveryBackoff: Duration(milliseconds: compilerRecoveryBackoffMs),
   );
 
   Future<void> shutdown() async {
@@ -108,4 +148,24 @@ void _printUsage(ArgParser parser) {
   print('  fletch dev');
   print('  fletch dev --entry bin/server.dart --port 8080');
   print('  fletch dev --watch lib,routes,controllers');
+  print('  fletch dev --verbose-compiler');
+  print('  fletch dev --compiler-max-recovery-attempts 2');
+  print('  fletch dev --compiler-max-diagnostics 120');
+  print('  fletch dev --compiler-recovery-backoff-ms 250');
+}
+
+int _parseIntOption(
+  ArgResults results, {
+  required String optionName,
+  required int min,
+}) {
+  final raw = results[optionName] as String;
+  final parsed = int.tryParse(raw);
+  if (parsed == null || parsed < min) {
+    print(
+      "❌ Invalid value for --$optionName: '$raw' (expected integer >= $min)",
+    );
+    exit(1);
+  }
+  return parsed;
 }

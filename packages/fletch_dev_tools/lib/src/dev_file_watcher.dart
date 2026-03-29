@@ -10,9 +10,11 @@ class DevFileWatcher {
 
   final List<StreamSubscription> _subscriptions = [];
   Timer? _debounceTimer;
+  final Map<String, WatchEvent> _pendingByPath = {};
 
-  /// Callback triggered when files change (after debouncing).
-  final Future<void> Function(WatchEvent event) onChanged;
+  /// Callback triggered with a coalesced batch of file changes
+  /// after debouncing.
+  final Future<void> Function(List<WatchEvent> events) onChanged;
 
   DevFileWatcher({
     required List<String> watchDirectories,
@@ -44,11 +46,15 @@ class DevFileWatcher {
 
   void _handleEvent(WatchEvent event) {
     if (_shouldIgnore(event.path)) return;
+    _pendingByPath[event.path] = event;
 
     // Debounce: cancel previous timer and start new one
     _debounceTimer?.cancel();
     _debounceTimer = Timer(_debounceDelay, () {
-      onChanged(event);
+      final batch = _pendingByPath.values.toList(growable: false);
+      _pendingByPath.clear();
+      if (batch.isEmpty) return;
+      onChanged(batch);
     });
   }
 
@@ -62,6 +68,7 @@ class DevFileWatcher {
   /// Stop watching all directories.
   Future<void> stop() async {
     _debounceTimer?.cancel();
+    _pendingByPath.clear();
     for (final sub in _subscriptions) {
       await sub.cancel();
     }

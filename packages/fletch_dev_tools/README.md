@@ -40,6 +40,15 @@ fletch dev --entry bin/main.dart --port 8080
 # Watch multiple directories
 fletch dev --entry bin/main.dart --watch lib,routes,controllers
 
+# Verbose incremental compiler logs
+fletch dev --entry bin/main.dart --verbose-compiler
+
+# Tune compiler recovery policy
+fletch dev --entry bin/main.dart \
+  --compiler-max-recovery-attempts 2 \
+  --compiler-max-diagnostics 120 \
+  --compiler-recovery-backoff-ms 250
+
 # Show help
 fletch dev --help
 ```

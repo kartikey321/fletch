@@ -142,6 +142,12 @@ void main() {
                 ],
               ),
               SidebarGroup(
+                title: 'Development',
+                links: [
+                  SidebarLink(text: "Hot Reload", href: '/development/hot-reload'),
+                ],
+              ),
+              SidebarGroup(
                 title: 'Advanced',
                 links: [
                   SidebarLink(text: "Isolated Containers", href: '/advanced/isolated-containers'),

@@ -71,7 +71,8 @@ void main() {
       expect(first.decision, ReloadDecision.requiresRestart); // default safe
 
       // Modify body and reanalyze
-      await f.writeAsString('String formatDomain(String s) => s.toUpperCase();');
+      await f
+          .writeAsString('String formatDomain(String s) => s.toUpperCase();');
       final second = await analyzer.analyze(f.path);
       expect(second.decision, ReloadDecision.canHotReload);
     });
@@ -82,7 +83,8 @@ void main() {
       final f = await createFile('lib/bin_utils.dart', src);
       await analyzer.analyze(f.path); // cache
 
-      await f.writeAsString('int decode(List<int> bytes) { return bytes.length; }');
+      await f.writeAsString(
+          'int decode(List<int> bytes) { return bytes.length; }');
       final result = await analyzer.analyze(f.path);
       expect(result.decision, ReloadDecision.canHotReload);
     });
@@ -167,6 +169,49 @@ void doSomething() => print('hi');
       final result = await analyzer.analyze(f.path);
       // No changes detected (nothing to diff) → falls through to default
       expect(result.decision, ReloadDecision.requiresRestart);
+    });
+
+    test('route-registration file body change requests route reassemble',
+        () async {
+      final f = await createFile('lib/routes.dart', '''
+void registerRoutes(dynamic app) {
+  app.get('/health', healthHandler);
+}
+
+void healthHandler(req, res) {
+  res.text('ok-v1');
+}
+''');
+      await analyzer.analyze(f.path); // prime cache
+
+      await f.writeAsString('''
+void registerRoutes(dynamic app) {
+  app.get('/health', healthHandler);
+}
+
+void healthHandler(req, res) {
+  res.text('ok-v2');
+}
+''');
+      final result = await analyzer.analyze(f.path);
+
+      expect(result.decision, ReloadDecision.canHotReload);
+      expect(result.requiresRouteReassemble, isTrue);
+    });
+
+    test('non-route file body change skips route reassemble', () async {
+      final f = await createFile('lib/service.dart', '''
+String formatName(String input) => input.trim();
+''');
+      await analyzer.analyze(f.path); // prime cache
+
+      await f.writeAsString('''
+String formatName(String input) => input.toUpperCase();
+''');
+      final result = await analyzer.analyze(f.path);
+
+      expect(result.decision, ReloadDecision.canHotReload);
+      expect(result.requiresRouteReassemble, isFalse);
     });
   });
 

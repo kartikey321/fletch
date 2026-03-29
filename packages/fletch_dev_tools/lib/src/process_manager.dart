@@ -44,6 +44,7 @@ class ProcessManager {
       ],
       environment: {
         'PORT': _port.toString(),
+        'FLETCH_DEV_RELOAD': '1',
       },
     );
 

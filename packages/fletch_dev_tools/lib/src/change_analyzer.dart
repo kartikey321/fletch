@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'ast_change_analyzer.dart';
 
 /// Decision about whether a file change can use hot reload or requires restart.
@@ -15,11 +17,13 @@ class AnalysisResult {
   final ReloadDecision decision;
   final List<CodeChange> changes;
   final String reason;
+  final bool requiresRouteReassemble;
 
   const AnalysisResult({
     required this.decision,
     required this.changes,
     required this.reason,
+    this.requiresRouteReassemble = false,
   });
 }
 
@@ -36,6 +40,7 @@ class ChangeAnalyzer {
         decision: ReloadDecision.requiresRestart,
         changes: [],
         reason: _quickRestartReason(path),
+        requiresRouteReassemble: false,
       );
     }
 
@@ -53,6 +58,7 @@ class ChangeAnalyzer {
           decision: ReloadDecision.requiresRestart,
           changes: changes,
           reason: reason,
+          requiresRouteReassemble: false,
         );
       }
 
@@ -61,6 +67,7 @@ class ChangeAnalyzer {
           decision: ReloadDecision.canHotReload,
           changes: changes,
           reason: 'Body-only changes',
+          requiresRouteReassemble: _requiresRouteReassemble(path),
         );
       }
     }
@@ -69,7 +76,29 @@ class ChangeAnalyzer {
       decision: ReloadDecision.requiresRestart,
       changes: [],
       reason: 'File changed',
+      requiresRouteReassemble: false,
     );
+  }
+
+  /// Heuristic that decides if a hot reload should be followed by route
+  /// reassembly. Files that appear to register routes should reassemble so
+  /// updated handler bindings are applied.
+  bool _requiresRouteReassemble(String path) {
+    if (!path.endsWith('.dart')) return false;
+    try {
+      final content = File(path).readAsStringSync();
+      final routeApiPattern = RegExp(
+        r'\.(get|post|put|patch|delete|head|options|use|useController|mount)\s*\(',
+      );
+      return routeApiPattern.hasMatch(content) ||
+          content.contains('.hotReload(') ||
+          content.contains('configureDevHotReload(') ||
+          content.contains('registerRoutes(');
+    } catch (_) {
+      // Safe fallback: if analysis can't read the file, preserve behavior by
+      // reassembling routes after reload.
+      return true;
+    }
   }
 
   String _quickRestartReason(String path) {
