@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:fletch/fletch.dart';
 
 class CookieParser {
+  static final _semiColonSplit = RegExp(r';\s*');
+
   static MiddlewareHandler middleware({
     bool decodeValues = true,
     bool allowEmptyValues = true, // Allow empty values (e.g., logout=, flag=)
@@ -31,7 +33,7 @@ class CookieParser {
       return cookies;
     }
 
-    final pairs = cookieHeader.split(RegExp(r';\s*'));
+    final pairs = cookieHeader.split(_semiColonSplit);
     for (final pair in pairs) {
       if (pair.isEmpty) continue;
 

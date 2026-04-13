@@ -10,6 +10,21 @@ class ControllerOptions {
   late final String _prefix;
   ControllerOptions(this._app, this._prefix);
 
+  /// Resolves a registered service of type [T] from the app's DI container.
+  ///
+  /// Use this to access services during [Controller.registerRoutes] without
+  /// coupling to GetIt directly:
+  ///
+  /// ```dart
+  /// @override
+  /// void registerRoutes(ControllerOptions options) {
+  ///   final svc = options.resolve<UserService>();
+  ///   options.get('/list', (req, res) async => res.json(await svc.list()));
+  /// }
+  /// ```
+  T resolve<T extends Object>({String? instanceName}) =>
+      _app.resolve<T>(instanceName: instanceName);
+
   /// Registers a `GET` handler relative to the controller prefix.
   void get(String path, RequestHandler handler,
       {List<MiddlewareHandler>? middleware}) {

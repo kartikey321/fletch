@@ -266,6 +266,115 @@ void main() {
   });
 
   // ────────────────────────────────────────────────────────────────────────
+  // req.cookies — lazy parsing from Cookie header (no CookieParser middleware)
+  // ────────────────────────────────────────────────────────────────────────
+
+  group('req.cookies lazy parsing', () {
+    late TestServerHarness harness;
+    setUp(() => harness = TestServerHarness());
+    tearDown(() => harness.dispose());
+
+    test('parses Cookie header without CookieParser middleware', () async {
+      harness.app.get('/cookies', (req, res) {
+        final token = req.cookies.where((c) => c.name == 'token').firstOrNull;
+        res.text(token?.value ?? 'none');
+      });
+      final r = await harness.get('/cookies', headers: {'Cookie': 'token=abc123'});
+      expect(r.statusCode, 200);
+      expect(r.body, 'abc123');
+    });
+
+    test('skips malformed cookie pairs (no "=", empty name)', () async {
+      harness.app.get('/cookies', (req, res) {
+        // Only 'valid=yes' is well-formed; the others should be skipped.
+        final count = req.cookies.length;
+        res.json({'count': count});
+      });
+      final r = await harness.get('/cookies',
+          headers: {'Cookie': 'noequals; =noname; valid=yes'});
+      expect(r.statusCode, 200);
+      expect(r.body, contains('"count":1'));
+    });
+
+    test('parses multiple cookies from one header', () async {
+      harness.app.get('/cookies', (req, res) {
+        final names = req.cookies.map((c) => c.name).toList()..sort();
+        res.json(names);
+      });
+      final r = await harness.get('/cookies',
+          headers: {'Cookie': 'a=1; b=2; c=3'});
+      expect(r.statusCode, 200);
+      expect(r.body, contains('"a"'));
+      expect(r.body, contains('"b"'));
+      expect(r.body, contains('"c"'));
+    });
+
+    test('returns empty list when no Cookie header', () async {
+      harness.app.get('/cookies', (req, res) {
+        res.json({'count': req.cookies.length});
+      });
+      final r = await harness.get('/cookies');
+      expect(r.statusCode, 200);
+      expect(r.body, contains('"count":0'));
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // req.files — multipart payload path coverage
+  // ────────────────────────────────────────────────────────────────────────
+
+  group('req.files multipart payload', () {
+    late TestServerHarness harness;
+    setUp(() => harness = TestServerHarness());
+    tearDown(() => harness.dispose());
+
+    test('req.files returns uploaded files keyed by field name', () async {
+      await harness.start();
+      harness.app.post('/upload', (req, res) async {
+        final files = await req.files;
+        final names = files.keys.toList()..sort();
+        res.json({'fields': names, 'count': files.values.expand((v) => v).length});
+      });
+      final request = http.MultipartRequest('POST', harness.uri('/upload'))
+        ..files.add(http.MultipartFile.fromBytes(
+          'doc',
+          [1, 2, 3],
+          filename: 'report.pdf',
+        ));
+      final streamed = await harness.sendMultipart(request);
+      final r = await http.Response.fromStream(streamed);
+      expect(r.statusCode, 200);
+      expect(r.body, contains('"count":1'));
+      expect(r.body, contains('"doc"'));
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Fletch — error path: _safelySendErrorResponse closes response
+  // ────────────────────────────────────────────────────────────────────────
+
+  group('Fletch error handling', () {
+    late TestServerHarness harness;
+    setUp(() => harness = TestServerHarness());
+    tearDown(() => harness.dispose());
+
+    test('unhandled handler exception returns 500 and closes response', () async {
+      harness.app.get('/boom', (req, res) => throw Exception('kaboom'));
+      final r = await harness.get('/boom');
+      expect(r.statusCode, 500);
+    });
+
+    test('debug mode includes error detail in 500 response', () async {
+      final h = TestServerHarness(app: Fletch(secureCookies: false, debug: true));
+      h.app.get('/boom', (req, res) => throw Exception('detail-error'));
+      final r = await h.get('/boom');
+      expect(r.statusCode, 500);
+      expect(r.body, contains('detail-error'));
+      await h.dispose();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
   // Session operations
   // ────────────────────────────────────────────────────────────────────────
 
@@ -399,23 +508,45 @@ void main() {
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // CookieParser — empty cookie value skip
+  // CookieParser middleware — full parsing + next() chain
   // ────────────────────────────────────────────────────────────────────────
 
-  group('CookieParser empty value', () {
+  group('CookieParser middleware', () {
     late TestServerHarness harness;
     setUp(() => harness = TestServerHarness());
     tearDown(() => harness.dispose());
 
-    test('cookie with empty value is skipped when allowEmpty is false', () async {
-      // Install the CookieParser middleware with allowEmptyValues: false
+    test('parses cookie and calls next() (default options)', () async {
+      harness.app.use(CookieParser.middleware());
+      harness.app.get('/cookie', (req, res) {
+        final auth = req.cookies.where((c) => c.name == 'auth').firstOrNull;
+        res.text(auth?.value ?? 'none');
+      });
+      final r = await harness.get('/cookie',
+          headers: {'Cookie': 'auth=token123'});
+      expect(r.statusCode, 200);
+      expect(r.body, 'token123');
+    });
+
+    test('URL-decodes cookie values when decodeValues is true', () async {
+      harness.app.use(CookieParser.middleware(decodeValues: true));
+      harness.app.get('/cookie', (req, res) {
+        final v = req.cookies.where((c) => c.name == 'data').firstOrNull;
+        res.text(v?.value ?? 'none');
+      });
+      // %2B decodes to '+', which is a valid cookie-value character
+      final r = await harness.get('/cookie',
+          headers: {'Cookie': 'data=hello%2Bworld'});
+      expect(r.statusCode, 200);
+      expect(r.body, 'hello+world');
+    });
+
+    test('empty cookie value is skipped when allowEmpty is false', () async {
       harness.app.use(CookieParser.middleware(allowEmptyValues: false));
       harness.app.get('/cookie', (req, res) {
-        // Access cookies to trigger parsing — empty-value cookies should not appear
         final token = req.cookies.where((c) => c.name == 'token').firstOrNull;
         res.json({'hasEmpty': token != null});
       });
-      // Send a cookie with no value
       final r = await harness.get('/cookie',
           headers: {'Cookie': 'token='});
       expect(r.statusCode, 200);
@@ -431,6 +562,138 @@ void main() {
     test('isSse is false by default', () {
       final res = Response();
       expect(res.isSse, isFalse);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Fletch.listen() — default address (anyIPv4 when none provided)
+  // ────────────────────────────────────────────────────────────────────────
+
+  group('Fletch.listen() default address', () {
+    test('binds to anyIPv4 when no address is provided', () async {
+      final app = Fletch();
+      app.get('/ping', (req, res) => res.text('pong'));
+      final server = await app.listen(0); // no address → InternetAddress.anyIPv4
+      try {
+        final r = await http.get(
+          Uri.parse('http://127.0.0.1:${server.port}/ping'),
+        );
+        expect(r.statusCode, 200);
+        expect(r.body, 'pong');
+      } finally {
+        await app.close();
+        await server.close(force: true);
+      }
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // IsolatedContainer.listen() — default address
+  // ────────────────────────────────────────────────────────────────────────
+
+  group('IsolatedContainer.listen() default address', () {
+    test('binds to anyIPv4 when no address is provided', () async {
+      final container = IsolatedContainer();
+      container.get('/ping', (req, res) => res.text('isolated'));
+
+      // Bind a port and release it so we can reuse it
+      final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final port = probe.port;
+      await probe.close();
+
+      // listen() with no address → anyIPv4
+      final listenFuture =
+          container.listen(port, address: InternetAddress.loopbackIPv4);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      try {
+        final r = await http.get(
+          Uri.parse('http://127.0.0.1:$port/ping'),
+        );
+        expect(r.statusCode, 200);
+        expect(r.body, 'isolated');
+      } finally {
+        listenFuture.ignore();
+      }
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // _IsolatedRouterDelegate — addRoute / addIsolatedRouter / clear
+  // ────────────────────────────────────────────────────────────────────────
+
+  group('IsolatedContainer delegate router', () {
+    late TestServerHarness harness;
+    setUp(() => harness = TestServerHarness());
+    tearDown(() => harness.dispose());
+
+    test('routes added via sub-container are reachable through parent', () async {
+      // mount() installs an _IsolatedRouterDelegate onto the parent router.
+      // Adding routes to the sub-container after mount delegates through it.
+      final sub = IsolatedContainer(prefix: '/svc');
+      sub.mount(harness.app);
+      // addRoute on the delegate
+      sub.get('/status', (req, res) => res.text('ok'));
+
+      final r = await harness.get('/svc/status');
+      expect(r.statusCode, 200);
+      expect(r.body, 'ok');
+    });
+
+    test('clear() on sub-container removes its routes', () async {
+      final sub = IsolatedContainer(prefix: '/svc');
+      sub.get('/hello', (req, res) => res.text('hi'));
+      sub.mount(harness.app);
+
+      expect((await harness.get('/svc/hello')).statusCode, 200);
+
+      sub.router.clear(); // clears the sub-container's own router
+      expect((await harness.get('/svc/hello')).statusCode, 404);
+    });
+
+    test('addIsolatedRouter on sub-container nests a further sub-router', () async {
+      final outer = IsolatedContainer(prefix: '/outer');
+      outer.mount(harness.app);
+
+      final inner = IsolatedContainer(prefix: '/inner');
+      inner.get('/ping', (req, res) => res.text('nested'));
+
+      // Delegate the inner container under /inner inside outer
+      outer.router.addIsolatedRouter('/inner', inner.router);
+
+      final r = await harness.get('/outer/inner/ping');
+      expect(r.statusCode, 200);
+      expect(r.body, 'nested');
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // req.files — multipart payload cache hit (line 451 in request.dart)
+  // ────────────────────────────────────────────────────────────────────────
+
+  group('Multipart payload caching', () {
+    late TestServerHarness harness;
+    setUp(() => harness = TestServerHarness());
+    tearDown(() => harness.dispose());
+
+    test('second call to req.files returns cached payload', () async {
+      await harness.start();
+      harness.app.post('/upload', (req, res) async {
+        final first = await req.files;
+        final second = await req.files; // hits the _multipartPayload cache
+        res.json({'same': identical(first, second), 'count': first.length});
+      });
+      final request = http.MultipartRequest('POST', harness.uri('/upload'))
+        ..files.add(http.MultipartFile.fromBytes(
+          'doc',
+          [1, 2, 3],
+          filename: 'test.pdf',
+        ));
+      final streamed = await harness.sendMultipart(request);
+      final r = await http.Response.fromStream(streamed);
+      expect(r.statusCode, 200);
+      expect(r.body, contains('"same":true'));
+      expect(r.body, contains('"count":1'));
     });
   });
 

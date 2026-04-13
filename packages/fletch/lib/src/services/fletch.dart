@@ -4,7 +4,6 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:fletch/fletch.dart';
-import 'package:fletch/src/middleware/cookies_parser.dart';
 
 /// Common HTTP method constants used across the framework.
 // ignore_for_file: constant_identifier_names
@@ -130,7 +129,8 @@ class Fletch extends BaseContainer {
   ///   exception strings can expose connection strings, file paths, and other
   ///   sensitive internal details. Default: `false`.
   ///
-  /// - [useCookieParser]: Auto-parse Cookie header (default: true).
+  /// - [useCookieParser]: Deprecated — cookies are now parsed lazily on first
+  ///   access of `req.cookies`. This parameter has no effect.
   ///
   /// - [logger]: Custom logger instance. Defaults to console logger.
   ///
@@ -166,6 +166,9 @@ class Fletch extends BaseContainer {
   /// - Use external [sessionStore] for multi-instance deployments
   /// - Session cookies use httpOnly, SameSite=Lax by default
   Fletch({
+    @Deprecated(
+        'Cookie parsing is now lazy on req.cookies — this parameter has no effect and will be removed in a future release.')
+    // ignore: deprecated_member_use_from_same_package
     bool useCookieParser = true,
     this.maxBodySize = 10 * 1024 * 1024, // 10MB
     this.maxFileSize = 100 * 1024 * 1024, // 100MB
@@ -184,9 +187,7 @@ class Fletch extends BaseContainer {
               sessionSecret != null ? SessionSigner(sessionSecret) : null,
         ) {
     _validateConfig();
-    if (useCookieParser) {
-      use(CookieParser.middleware());
-    }
+    // Cookie parsing is now demand-driven via req.cookies — no middleware needed.
   }
 
   /// Registers a [factory] that re-registers all routes and also exposes
@@ -253,7 +254,7 @@ class Fletch extends BaseContainer {
   final Map<HttpServer, Future<void>> _serverLifecycles = {};
 
   @override
-  Future<void> handleRequest(HttpRequest httpRequest) async {
+  Future<void> handleRequest(HttpRequest httpRequest) {
     final request = Request.from(
       httpRequest,
       container: container,
@@ -262,8 +263,7 @@ class Fletch extends BaseContainer {
       sessionSigner: sessionSigner,
       sessionStore: sessionStore,
     );
-    final response = Response();
-    await processRequest(request, response);
+    return processRequest(request, Response());
   }
 
   /// Binds an [HttpServer] on the provided [port] (and optional [address]) and
@@ -443,7 +443,7 @@ class Fletch extends BaseContainer {
               request.headers.value('access-control-request-headers') ??
                   allowedHeaders.join(', '));
           response.setStatus(HttpStatus.noContent); // 204 No Content
-          response.send(request.httpRequest.response);
+          await response.send(request.httpRequest.response);
           return;
         }
       } else if (origin != null && !isAllowedOrigin(origin)) {
@@ -451,14 +451,14 @@ class Fletch extends BaseContainer {
         logger.w('CORS denied - origin not allowed: $origin');
         response.setStatus(HttpStatus.forbidden);
         response.text('CORS policy does not allow this origin.');
-        response.send(request.httpRequest.response);
+        await response.send(request.httpRequest.response);
         return;
       } else if (!allowedMethods.contains(method)) {
         // If method is not allowed, respond with 405 Method Not Allowed
         logger.w('CORS denied - method not allowed: $method');
         response.setStatus(HttpStatus.methodNotAllowed);
         response.text('Method not allowed.');
-        response.send(request.httpRequest.response);
+        await response.send(request.httpRequest.response);
         return;
       }
 
@@ -606,7 +606,7 @@ class Fletch extends BaseContainer {
     }
   }
 
-  Future<void> _handleRequestWithTimeout(HttpRequest httpRequest) async {
+  Future<void> _handleRequestWithTimeout(HttpRequest httpRequest) {
     // Reject new requests during shutdown
     if (_isShuttingDown) {
       httpRequest.response
@@ -614,26 +614,25 @@ class Fletch extends BaseContainer {
         ..headers.add('Connection', 'close')
         ..write('Server is shutting down')
         ..close();
-      return;
+      return Future.value();
     }
 
     _activeRequests++;
 
-    try {
-      final future = handleRequest(httpRequest);
-      if (requestTimeout != null) {
-        await future.timeout(
-          requestTimeout!,
-          onTimeout: () => throw HttpError(408, 'Request Timeout'),
-        );
-      } else {
-        await future;
-      }
-    } catch (error, stackTrace) {
-      await _safelySendErrorResponse(httpRequest, error, stackTrace);
-    } finally {
-      _activeRequests--;
-    }
+    // Build the work future: with or without timeout.
+    // Avoid async/await here so no extra Future wrapper is allocated on the
+    // hot path — handleRequest()'s own Future is returned directly.
+    final work = requestTimeout != null
+        ? handleRequest(httpRequest).timeout(
+            requestTimeout!,
+            onTimeout: () => throw HttpError(408, 'Request Timeout'),
+          )
+        : handleRequest(httpRequest);
+
+    return work
+        .catchError((Object error, StackTrace stackTrace) =>
+            _safelySendErrorResponse(httpRequest, error, stackTrace))
+        .whenComplete(() => _activeRequests--);
   }
 
   Future<void> _safelySendErrorResponse(
@@ -692,22 +691,10 @@ class Fletch extends BaseContainer {
           'maxFileSize ($maxFileSize) is greater than maxBodySize ($maxBodySize); large uploads may hit body limit first.');
     }
 
-    if (sessionSecret != null && sessionSecret!.length < 32) {
-      throw StateError(
-          'sessionSecret must be at least 32 characters for security');
-    }
-
     if (sessionSecret != null) {
       logger.i('✅ Session security enabled with HMAC-SHA256 signing');
     } else {
       logger.w('⚠️  No session secret configured - sessions will be unsigned!');
-    }
-
-    if (sessionStore == null) {
-      logger.w(
-          '⚠️  Using in-memory session store - sessions will be lost on restart');
-      logger.w(
-          '   For production, configure an external store (Redis, PostgreSQL, etc.)');
     }
 
     if (secureCookies) {
