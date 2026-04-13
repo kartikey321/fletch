@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:fletch/fletch.dart';
@@ -67,6 +68,18 @@ abstract class BaseContainer {
   void useController(String prefix, Controller controller) {
     controller.initialize(this, prefix: prefix);
   }
+
+  /// Resolves a registered service of type [T] from the DI container.
+  ///
+  /// Use this when constructing controllers or passing services to factories
+  /// at startup, after all registrations are done:
+  ///
+  /// ```dart
+  /// app.registerSingleton<UserService>(UserService(db));
+  /// app.useController('/users', UserController(app.resolve<UserService>()));
+  /// ```
+  T resolve<T extends Object>({String? instanceName}) =>
+      container.get<T>(instanceName: instanceName);
 
   /// Registers a pre-built [instance] that will be served for type [T].
   void inject<T extends Object>(T instance) {
@@ -155,42 +168,37 @@ abstract class BaseContainer {
     // Fast path: no route-level middleware. Check global middleware at call
     // time (it can be added after route registration via app.use()).
     if (routeMiddleware.isEmpty) {
-      return (Request request, Response response) async {
+      // Non-async: the handler's own Future is returned directly with no extra
+      // wrapping. When _middleware is empty the whole call is zero-overhead.
+      return (Request request, Response response) {
         if (_middleware.isEmpty) {
-          // Zero-middleware hot path — call handler directly, no closures.
           return handler(request, response);
         }
-        // Global middleware exists; run the chain.
         int index = 0;
-        Future<void> next() async {
+        FutureOr<void> runNext() {
           if (index < _middleware.length) {
-            await _middleware[index++](request, response, next);
-          } else {
-            await handler(request, response);
+            return _middleware[index++](request, response, runNext);
           }
+          return handler(request, response);
         }
-        await next();
+        return runNext();
       };
     }
 
-    // Route has its own middleware — full chain.
-    return (Request request, Response response) async {
+    // Route has its own middleware — full chain, still non-async.
+    return (Request request, Response response) {
       int globalIndex = 0;
       int routeIndex = 0;
-
-      Future<void> runNextMiddleware() async {
+      FutureOr<void> runNext() {
         if (globalIndex < _middleware.length) {
-          await _middleware[globalIndex++](
-              request, response, runNextMiddleware);
-        } else if (routeIndex < routeMiddleware.length) {
-          await routeMiddleware[routeIndex++](
-              request, response, runNextMiddleware);
-        } else {
-          await handler(request, response);
+          return _middleware[globalIndex++](request, response, runNext);
         }
+        if (routeIndex < routeMiddleware.length) {
+          return routeMiddleware[routeIndex++](request, response, runNext);
+        }
+        return handler(request, response);
       }
-
-      await runNextMiddleware();
+      return runNext();
     };
   }
 
@@ -250,15 +258,14 @@ abstract class BaseContainer {
   /// resolving routes, executing middleware/handlers and finally flushing the
   /// response (including error handling and session propagation).
   @protected
-  Future<void> handleRequest(HttpRequest httpRequest) async {
+  Future<void> handleRequest(HttpRequest httpRequest) {
     final request = Request.from(
       httpRequest,
       container: container,
       sessionSigner: sessionSigner,
       sessionStore: sessionStore,
     );
-    final response = Response();
-    await processRequest(request, response);
+    return processRequest(request, Response());
   }
 
   /// Executes middleware + handler pipeline for a prepared [request] and
@@ -278,10 +285,9 @@ abstract class BaseContainer {
 
     // Echo correlation ID only when the client sent one — free for benchmark
     // traffic that omits the header, still works for tracing in production.
-    final incomingId =
-        request.httpRequest.headers.value('x-request-id') ??
-        request.httpRequest.headers.value('x-correlation-id');
-    if (incomingId != null) {
+    // We check the backing field directly (null iff no header was sent) rather
+    // than re-reading HttpHeaders — eliminates 2 lookups on every request.
+    if (request.hasIncomingRequestId) {
       response.setHeader('X-Request-Id', request.requestId);
     }
 

@@ -28,17 +28,6 @@ class _RoutePattern {
     return _RoutePattern(regex, paramNames);
   }
 
-  bool matches(String path) => regex.hasMatch(path);
-
-  Map<String, String> extractParams(String path) {
-    final match = regex.firstMatch(path);
-    if (match == null) return {};
-    final params = <String, String>{};
-    for (var i = 0; i < paramNames.length; i++) {
-      params[paramNames[i]] = match.group(i + 1)!;
-    }
-    return params;
-  }
 }
 
 class _RouteEntry {
@@ -57,15 +46,6 @@ class _RouteEntry {
       : method = '',
         pattern = _RoutePattern.parse(prefix!),
         handler = ((req, res) => Future.value());
-
-  bool matches(String method, String path) {
-    if (isolatedRouter != null) {
-      return path.startsWith(prefix!);
-    }
-    return this.method == method && pattern.matches(path);
-  }
-
-  Map<String, String> extractParams(String path) => pattern.extractParams(path);
 
   /// Matches method+path in a single regex pass and returns a [RouteMatch]
   /// directly, avoiding the redundant second [extractParams] call.

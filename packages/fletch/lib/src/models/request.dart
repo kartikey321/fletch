@@ -95,8 +95,37 @@ class Request {
   final SessionStore? _sessionStoreRef;
   Session? _sessionInstance;
 
-  /// Dependency injection container for this request.
-  final GetIt container;
+  // Internal DI scope — the app-level GetIt instance, or a scoped
+  // GetIt.asNewInstance() for IsolatedContainers.
+  final GetIt _scope;
+
+  /// Resolves a registered service of type [T] from the DI scope.
+  ///
+  /// Prefer this over [container] for new code:
+  ///
+  /// ```dart
+  /// app.get('/users', (req, res) async {
+  ///   final svc = req.resolve<UserService>();
+  ///   res.json(await svc.list());
+  /// });
+  /// ```
+  ///
+  /// For [IsolatedContainer] modules the resolution uses the module's own
+  /// scoped container so registrations don't bleed across mount points.
+  T resolve<T extends Object>({String? instanceName}) =>
+      _scope.get<T>(instanceName: instanceName);
+
+  /// The raw GetIt dependency injection container for this request.
+  ///
+  /// Deprecated: use [resolve] instead.
+  /// `req.container.get<T>()` → `req.resolve<T>()`
+  ///
+  /// Will be removed in v3.0.0.
+  @Deprecated(
+    'Use req.resolve<T>() instead. '
+    'req.container exposes GetIt as a framework detail and will be removed in v3.0.0.',
+  )
+  GetIt get container => _scope;
 
   /// Maximum allowed request body size in bytes (default: 10MB).
   final int maxBodySize;
@@ -119,6 +148,16 @@ class Request {
   @internal
   bool sessionTouched = false;
 
+  /// `true` when the incoming request carried an `x-request-id` or
+  /// `x-correlation-id` header.  The framework uses this flag (set once at
+  /// construction) to echo the correlation header on the response without
+  /// re-reading [HttpHeaders] a second time inside `processRequest`.
+  ///
+  /// Only valid before the route handler runs (the backing field is lazily
+  /// populated afterwards). Framework-internal — do not use in handlers.
+  @internal
+  bool get hasIncomingRequestId => _requestId != null;
+
   /// Loads the session from the store without marking [sessionTouched].
   /// Used by the framework for returning-visitor pre-load; does not count
   /// as application code accessing the session.
@@ -130,14 +169,44 @@ class Request {
     return s.load();
   }
 
+  // Lazily parsed — null until first access of [cookies].
+  List<Cookie>? _cookiesCache;
+
   /// Parsed cookies from the Cookie header.
-  List<Cookie> cookies = [];
+  ///
+  /// Parsed on first access; routes that never read cookies pay zero cost.
+  List<Cookie> get cookies => _cookiesCache ??= _parseCookies();
+
+  /// Allows framework or middleware to pre-populate the cookies list.
+  set cookies(List<Cookie> value) => _cookiesCache = value;
+
+  static final _semiColonSplit = RegExp(r';\s*');
+
+  List<Cookie> _parseCookies() {
+    final header = httpRequest.headers.value(HttpHeaders.cookieHeader);
+    if (header == null || header.isEmpty) return const [];
+    final result = <Cookie>[];
+    for (final pair in header.split(_semiColonSplit)) {
+      if (pair.isEmpty) continue;
+      final eqIdx = pair.indexOf('=');
+      if (eqIdx <= 0) continue;
+      final name = pair.substring(0, eqIdx).trim();
+      if (name.isEmpty) continue;
+      final value = pair.substring(eqIdx + 1).trim();
+      try {
+        result.add(Cookie(name, Uri.decodeComponent(value)));
+      } catch (_) {
+        // Skip cookies with malformed percent-encoding.
+      }
+    }
+    return result;
+  }
 
   Request(
     this.httpRequest,
     String? sessionId,
     String? requestId,
-    this.container, {
+    GetIt scope, {
     bool isSessionNew = false,
     SessionStore? sessionStore,
     /// Provide a pre-built [Session] to share across scoped sub-requests
@@ -147,7 +216,8 @@ class Request {
     this.maxBodySize = 10 * 1024 * 1024,
     this.maxFileSize = 100 * 1024 * 1024,
     this.sessionSigner,
-  })  : _isSessionNew = isSessionNew,
+  })  : _scope = scope,
+        _isSessionNew = isSessionNew,
         _sessionId = existingSession?.id ?? sessionId,
         _requestId = requestId,
         _sessionStoreRef = sessionStore,

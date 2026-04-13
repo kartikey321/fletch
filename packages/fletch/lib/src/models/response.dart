@@ -45,7 +45,10 @@ class Response {
   bool isBinary = false;
 
   bool _isSent = false;
-  final List<Cookie> _cookies = [];
+  // Lazily allocated — most API responses never set cookies, so we skip the
+  // List<Cookie> allocation entirely for those requests.
+  List<Cookie>? _cookiesLazy;
+  List<Cookie> get _cookies => _cookiesLazy ??= [];
 
   // Streaming fields
   Stream<List<int>>? _streamData;
@@ -138,7 +141,8 @@ class Response {
   /// Returns `true` when a cookie with the given [name] (and optional [path])
   /// is queued for the response.
   bool hasCookie(String name, {String? path}) {
-    return _cookies.any((cookie) {
+    if (_cookiesLazy == null) return false;
+    return _cookiesLazy!.any((cookie) {
       if (cookie.name != name) return false;
       if (path == null) return true;
       return (cookie.path ?? '/') == path;
@@ -427,11 +431,8 @@ class Response {
   }
 
   void _writeCookies(HttpResponse httpResponse) {
-    if (_cookies.isEmpty) {
-      return;
-    }
-
-    for (final cookie in _cookies) {
+    if (_cookiesLazy == null || _cookiesLazy!.isEmpty) return;
+    for (final cookie in _cookiesLazy!) {
       httpResponse.cookies.add(cookie);
     }
   }
