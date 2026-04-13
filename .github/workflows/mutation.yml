@@ -1,30 +1,20 @@
 name: Mutation Testing
 
 on:
-  # Run weekly on Monday at 03:00 UTC (off-peak)
-  schedule:
-    - cron: '0 3 * * 1'
-  # Allow manual trigger from the Actions tab
-  workflow_dispatch:
-    inputs:
-      sample:
-        description: 'Mutation sample size (0 = all)'
-        required: false
-        default: '50'
-      threshold:
-        description: 'Minimum mutation score (0-100)'
-        required: false
-        default: '75'
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
-  mutate:
-    name: Mutation Score
+  mutation-test:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dart-lang/setup-dart@v1
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
 
@@ -34,42 +24,16 @@ jobs:
 
       - name: Install dart_mutant
         run: |
-          curl -fsSL \
-            "https://github.com/MelbourneDeveloper/dart_mutant/releases/download/v0.1.0/dart_mutant-v0.1.0-aarch64-apple-darwin.tar.gz" \
-            -o /tmp/dart_mutant.tar.gz || true
-          # Fallback: try x86_64 linux binary
-          curl -fsSL \
-            "https://github.com/MelbourneDeveloper/dart_mutant/releases/latest/download/dart_mutant-x86_64-unknown-linux-gnu.tar.gz" \
-            -o /tmp/dart_mutant.tar.gz
-          tar xz -C /usr/local/bin -f /tmp/dart_mutant.tar.gz
-          dart_mutant --version
+          curl -L https://github.com/Nimblesite/dart_mutant/releases/latest/download/dart_mutant-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv dart_mutant /usr/local/bin/
 
-      - name: Run mutation testing
+      - name: Run mutation tests
         working-directory: packages/fletch
-        run: |
-          dart_mutant \
-            --glob "lib/**/*.dart" \
-            --exclude "**/*.g.dart" "benchmark/**" \
-            --parallel 4 \
-            --sample ${{ github.event.inputs.sample || '50' }} \
-            --threshold ${{ github.event.inputs.threshold || '75' }} \
-            --html \
-            --junit \
-            --ai-report \
-            --output ./mutation-reports
+        run: dart_mutant --threshold 80 --junit --quiet
 
       - name: Upload mutation report
-        if: always()
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: mutation-report
           path: packages/fletch/mutation-reports/
-          retention-days: 30
-
-      - name: Publish test results
-        if: always()
-        uses: mikepenz/action-junit-report@v4
-        with:
-          report_paths: packages/fletch/mutation-reports/*.xml
-          check_name: Mutation Test Results
-          fail_on_failure: false
