@@ -5,6 +5,52 @@ All notable changes to fletch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-04-14
+
+### Performance
+
+- **47,104 RPS** on Apple M-series — now within **1.5% of raw `dart:io`**, up from ~10% behind in
+  2.2.0.
+- **RadixRouter structural refactor** — replaced single `children: Map<String, RadixNode>` with
+  four typed slots (`staticChildren`, `regexParamChildren`, `wildcardParamChildren`, `globChild`).
+  Eliminates `.values` Iterable allocations on every route lookup. Static children use O(1) HashMap;
+  dynamic children use typed lists; all slots are lazily allocated (null until first use).
+- **`Response.send` de-async** — removed the `async` keyword from the common (non-streaming) path.
+  `httpResponse.close()` is now returned directly, eliminating one Future state machine allocation
+  per request.
+- **Removed redundant `.then<void>((_) {})` chain** in `_handleRequestWithTimeout` — saved one
+  pointless Future allocation per request.
+
+### Added
+
+- **Optional route parameters** (`:id?`) — expanded at `addRoute` time into all concrete path
+  combinations (e.g. `/users/:id?` registers both `/users/:id` and `/users`). Zero runtime cost;
+  no extra branching during lookup. Supports regex-constrained optionals (`:id(\\d+)?`).
+- **Named catch-all glob** (`*:name`) — captures all remaining path segments into `req.params`
+  (e.g. `/files/*:path` captures `images/2024/photo.jpg` as `path`). Unnamed `*` continues to
+  work as before.
+
+### Fixed
+
+- **`response.send()` never awaited** — all four call sites in `base_container.dart` and
+  `fletch.dart` (CORS preflight, CORS forbidden, CORS method-not-allowed, normal response flush)
+  now properly `await` the send Future. Previously, errors from `httpResponse.close()` (e.g.
+  client disconnect, broken pipe) were silently swallowed.
+
+### Removed
+
+- Dead methods `_RoutePattern.matches`, `_RoutePattern.extractParams`, `_RouteEntry.matches`,
+  `_RouteEntry.extractParams` from `ListRouter` — never called; `tryMatch` handles all matching.
+- Unreachable `StateError` for short `sessionSecret` in `_validateConfig` — `SessionSigner`
+  throws `ArgumentError` in the constructor before this code could ever run.
+
+### Tests
+
+- **318 tests, 97.0% line coverage** (up from 290 tests / 93.6% in 2.2.0).
+- New groups: optional params, named glob catch-all, router backtracking, regex node reuse,
+  cookie lazy parsing, multipart payload caching, CORS error handling, `IsolatedContainer`
+  delegate routing.
+
 ## [2.2.0] - 2026-03-15
 
 ### Performance

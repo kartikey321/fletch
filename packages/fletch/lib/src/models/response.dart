@@ -345,8 +345,11 @@ class Response {
 
   /// Flushes the accumulated headers/cookies into the provided [HttpResponse]
   /// and closes the sink. Subsequent invocations are ignored.
-  Future<void> send(HttpResponse httpResponse) async {
-    if (isSent) return;
+  ///
+  /// Non-async on the common (non-streaming) path — returns [HttpResponse.close]
+  /// directly so no extra Future state machine is allocated per request.
+  Future<void> send(HttpResponse httpResponse) {
+    if (isSent) return Future.value();
     _writeCookies(httpResponse);
     _isSent = true;
 
@@ -356,70 +359,58 @@ class Response {
       httpResponse.headers.set(name, value);
     });
 
-    // Disable buffering and enable chunked transfer for streaming responses
+    // Streaming paths need their own async context — delegate to helper.
     if (_isStream || _isSse) {
-      httpResponse.bufferOutput = false;
-      httpResponse.headers.chunkedTransferEncoding = true;
+      return _sendStreaming(httpResponse);
     }
 
-    // Handle generic streaming
-    if (_isStream && _streamData != null) {
-      try {
-        if (_flushEachChunk) {
-          // Flush after each chunk for real-time streaming
-          await for (final chunk in _streamData!) {
-            httpResponse.add(chunk);
-            await httpResponse.flush();
-          }
-        } else {
-          // Use addStream for better performance
-          await httpResponse.addStream(_streamData!);
-        }
-      } finally {
-        // Always close the response
-        try {
-          await httpResponse.close();
-        } catch (_) {
-          // Ignore close errors to preserve original streaming error.
-        }
-      }
-      return;
-    }
-
-    // Handle SSE responses
-    if (_isSse && _sseHandler != null) {
-      final sink = SSESink(httpResponse);
-
-      // Start keep-alive if configured
-      if (_sseKeepAlive != null) {
-        sink.startKeepAlive(_sseKeepAlive!);
-      }
-
-      try {
-        await _sseHandler!(sink);
-      } catch (e) {
-        // Error in SSE handler, close gracefully
-        if (!sink.isClosed) {
-          await sink.close();
-        }
-        rethrow;
-      } finally {
-        // Ensure connection is closed
-        if (!sink.isClosed) {
-          await sink.close();
-        }
-      }
-      return;
-    }
-
-    // Normal response handling
+    // Normal response: write body and return close() future directly.
     if (isBinary) {
       httpResponse.add(body as List<int>);
     } else if (body != null) {
       httpResponse.write(body);
     }
+    return httpResponse.close();
+  }
 
-    await httpResponse.close();
+  /// Handles streaming (chunked / SSE) responses. Kept in a separate async
+  /// method so the common [send] path pays no async state-machine cost.
+  Future<void> _sendStreaming(HttpResponse httpResponse) async {
+    httpResponse.bufferOutput = false;
+    httpResponse.headers.chunkedTransferEncoding = true;
+
+    if (_isStream && _streamData != null) {
+      try {
+        if (_flushEachChunk) {
+          await for (final chunk in _streamData!) {
+            httpResponse.add(chunk);
+            await httpResponse.flush();
+          }
+        } else {
+          await httpResponse.addStream(_streamData!);
+        }
+      } finally {
+        try {
+          await httpResponse.close();
+        } catch (_) {}
+      }
+      return;
+    }
+
+    if (_isSse && _sseHandler != null) {
+      final sink = SSESink(httpResponse);
+      if (_sseKeepAlive != null) {
+        sink.startKeepAlive(_sseKeepAlive!);
+      }
+      try {
+        await _sseHandler!(sink);
+      } catch (e) {
+        if (!sink.isClosed) await sink.close();
+        rethrow;
+      } finally {
+        if (!sink.isClosed) await sink.close();
+      }
+    }
   }
 
   void setHeader(String name, String value) {

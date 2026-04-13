@@ -337,7 +337,7 @@ abstract class BaseContainer {
     }
 
     if (!response.isSent) {
-      response.send(request.httpRequest.response);
+      await response.send(request.httpRequest.response);
     }
   }
 

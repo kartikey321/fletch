@@ -443,7 +443,7 @@ class Fletch extends BaseContainer {
               request.headers.value('access-control-request-headers') ??
                   allowedHeaders.join(', '));
           response.setStatus(HttpStatus.noContent); // 204 No Content
-          response.send(request.httpRequest.response);
+          await response.send(request.httpRequest.response);
           return;
         }
       } else if (origin != null && !isAllowedOrigin(origin)) {
@@ -451,14 +451,14 @@ class Fletch extends BaseContainer {
         logger.w('CORS denied - origin not allowed: $origin');
         response.setStatus(HttpStatus.forbidden);
         response.text('CORS policy does not allow this origin.');
-        response.send(request.httpRequest.response);
+        await response.send(request.httpRequest.response);
         return;
       } else if (!allowedMethods.contains(method)) {
         // If method is not allowed, respond with 405 Method Not Allowed
         logger.w('CORS denied - method not allowed: $method');
         response.setStatus(HttpStatus.methodNotAllowed);
         response.text('Method not allowed.');
-        response.send(request.httpRequest.response);
+        await response.send(request.httpRequest.response);
         return;
       }
 
@@ -630,7 +630,6 @@ class Fletch extends BaseContainer {
         : handleRequest(httpRequest);
 
     return work
-        .then<void>((_) {})
         .catchError((Object error, StackTrace stackTrace) =>
             _safelySendErrorResponse(httpRequest, error, stackTrace))
         .whenComplete(() => _activeRequests--);
