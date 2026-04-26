@@ -1,0 +1,16 @@
+name: fletch_roux_router
+description: >-
+  Roux-backed router adapter for Fletch.
+  Unlocks optional params (/:id?), repeated params (/:path+),
+  and grouped optional segments ({/:name}?) via the roux library.
+version: 0.1.0
+repository: https://github.com/kartikey321/dart_express
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  fletch: ^2.0.0
+  roux: ^1.0.1
+dev_dependencies:
+  test: ^1.31.0
