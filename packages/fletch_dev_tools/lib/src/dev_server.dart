@@ -40,6 +40,11 @@ class FletchDevServer {
   StreamSubscription<ReloadEvent>? _reloadEventsSub;
   GenerationId _activeGeneration = const GenerationId('gen-000001');
   bool _runtimeHooksUnavailableLogged = false;
+  Future<void>? _activeBatch;
+  Future<void> _lifecycleLock = Future<void>.value();
+
+  _ServerLifecycleState _state = _ServerLifecycleState.idle;
+  bool _restartInProgress = false;
 
   FletchDevServer({
     required String entryPoint,
@@ -82,6 +87,7 @@ class FletchDevServer {
     );
     _incrementalCompiler = IncrementalCompiler(
       entryPoint: _entryPoint,
+      packageConfigPath: _resolvePackageConfigPathFromEntrypoint(_entryPoint),
       verbose: _verboseCompiler,
       maxDiagnostics: _compilerMaxDiagnostics,
       maxRecoveryAttempts: _compilerMaxRecoveryAttempts,
@@ -114,6 +120,14 @@ class FletchDevServer {
 
   /// Start the development server.
   Future<void> start() async {
+    if (_state == _ServerLifecycleState.starting ||
+        _state == _ServerLifecycleState.running ||
+        _state == _ServerLifecycleState.restarting) {
+      return;
+    }
+
+    _state = _ServerLifecycleState.starting;
+
     print('╔════════════════════════════════════════╗');
     print('║   Fletch Development Server            ║');
     print('╚════════════════════════════════════════╝');
@@ -177,6 +191,8 @@ class FletchDevServer {
     await _fileWatcher.start();
     _metrics.setGauge(
         ReloadMetricNames.reloadQueueDepth, _batchProcessor.pendingDepth);
+
+    _state = _ServerLifecycleState.running;
   }
 
   Future<void> _startIncrementalCompiler() async {
@@ -215,23 +231,51 @@ class FletchDevServer {
 
   /// Stop the development server.
   Future<void> stop() async {
-    await _fileWatcher.stop();
-    await _incrementalCompiler.stop();
-    await _hotReloader.disconnect();
-    await _processManager.stop();
-    await _reloadEventsSub?.cancel();
-    await _reloadEngine.stop();
-    await _runtimeReadiness.close();
-    _runtimeReadiness = RuntimeReadinessCoordinator();
+    if (_state == _ServerLifecycleState.stopped ||
+        _state == _ServerLifecycleState.stopping ||
+        _state == _ServerLifecycleState.idle) {
+      return;
+    }
+
+    _state = _ServerLifecycleState.stopping;
+    await _serializeLifecycle(() async {
+      await _fileWatcher.stop();
+      await _batchProcessor.close();
+      final activeBatch = _activeBatch;
+      if (activeBatch != null) {
+        await activeBatch;
+      }
+      await _incrementalCompiler.stop();
+      await _hotReloader.disconnect();
+      await _processManager.stop();
+      await _reloadEventsSub?.cancel();
+      _reloadEventsSub = null;
+      await _reloadEngine.stop();
+      await _runtimeReadiness.close();
+      _runtimeReadiness = RuntimeReadinessCoordinator();
+    });
+    _state = _ServerLifecycleState.stopped;
   }
 
   /// Handle batched file change events with AST-based analysis.
   Future<void> _onFilesChanged(List<WatchEvent> events) async {
+    if (_state != _ServerLifecycleState.running) return;
     _metrics.setGauge(
       ReloadMetricNames.reloadQueueDepth,
       _batchProcessor.pendingDepth + events.length,
     );
-    await _batchProcessor.enqueue(events);
+
+    final enqueueFuture = _batchProcessor.enqueue(events);
+    _activeBatch = enqueueFuture;
+    try {
+      final accepted = await enqueueFuture;
+      if (!accepted) return;
+    } finally {
+      if (identical(_activeBatch, enqueueFuture)) {
+        _activeBatch = null;
+      }
+    }
+
     _metrics.setGauge(
         ReloadMetricNames.reloadQueueDepth, _batchProcessor.pendingDepth);
   }
@@ -572,6 +616,14 @@ class FletchDevServer {
         print('⚠️  VM service disconnected - hot reload unavailable');
       }
 
+      if (_restartInProgress) {
+        print(
+            '⏭️  Restart already in progress, skipping duplicate restart request');
+        return;
+      }
+
+      _restartInProgress = true;
+      _state = _ServerLifecycleState.restarting;
       print(
         '🔄 Hot restarting (${classification.combinedReason.isEmpty ? 'File changed' : classification.combinedReason})...',
       );
@@ -642,6 +694,12 @@ class FletchDevServer {
         _metrics
             .incrementCounter(ReloadMetricNames.reloadActivationFailuresTotal);
         print('❌ Restart failed: $e');
+      } finally {
+        _restartInProgress = false;
+        if (_state != _ServerLifecycleState.stopping &&
+            _state != _ServerLifecycleState.stopped) {
+          _state = _ServerLifecycleState.running;
+        }
       }
     } finally {
       totalStopwatch.stop();
@@ -851,4 +909,44 @@ class FletchDevServer {
     }
     return null;
   }
+
+  Future<void> _serializeLifecycle(Future<void> Function() action) {
+    final run = _lifecycleLock.then((_) => action());
+    _lifecycleLock = run.catchError((_) {});
+    return run;
+  }
+
+  String? _resolvePackageConfigPathFromEntrypoint(String entryPoint) {
+    final entryFile = File(entryPoint).absolute;
+    final fromEntry = _findUpwardPackageConfig(entryFile.parent);
+    if (fromEntry != null) return fromEntry;
+
+    final fromCwd = _findUpwardPackageConfig(Directory.current);
+    if (fromCwd != null) return fromCwd;
+
+    return null;
+  }
+
+  String? _findUpwardPackageConfig(Directory start) {
+    var current = start.absolute;
+    while (true) {
+      final candidate = File('${current.path}/.dart_tool/package_config.json');
+      if (candidate.existsSync()) {
+        return candidate.absolute.path;
+      }
+
+      final parent = current.parent;
+      if (parent.path == current.path) return null;
+      current = parent;
+    }
+  }
+}
+
+enum _ServerLifecycleState {
+  idle,
+  starting,
+  running,
+  restarting,
+  stopping,
+  stopped,
 }

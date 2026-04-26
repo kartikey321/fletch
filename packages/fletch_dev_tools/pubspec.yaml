@@ -1,6 +1,6 @@
 name: fletch_dev_tools
 description: >-
-  Development tools for Fletch - hot reload, hot restart, and CLI tools for 
+  Development tools for Fletch - hot reload, hot restart, and CLI tools for
   a Flutter-like development experience with backend Dart applications.
 version: 1.0.0
 repository: https://github.com/kartikey321/fletch
@@ -15,12 +15,13 @@ dependencies:
   vm_service: ^15.0.2
   args: ^2.6.0
   io: ^1.0.4
-  analyzer: ^6.0.0  # AST parsing and analysis
+  analyzer: ^6.0.0 # AST parsing and analysis
   frontend_server_client: ^4.0.0
 
 dev_dependencies:
   lints: ^6.0.0
   test: ^1.25.8
+  hotreloader: ^4.4.0
 
 executables:
   fletch: fletch

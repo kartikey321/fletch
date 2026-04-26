@@ -68,7 +68,7 @@ typedef IncrementalCompilerClientFactory = Future<IncrementalCompilerClient>
 /// attempting VM hot reload.
 class IncrementalCompiler {
   final String _entryPoint;
-  final String _packageConfigPath;
+  final String? _packageConfigPath;
   final bool _verbose;
   final int _maxDiagnostics;
   final int _maxRecoveryAttempts;
@@ -80,7 +80,7 @@ class IncrementalCompiler {
 
   IncrementalCompiler({
     required String entryPoint,
-    String packageConfigPath = '.dart_tool/package_config.json',
+    String? packageConfigPath,
     bool verbose = false,
     int maxDiagnostics = 80,
     int maxRecoveryAttempts = 1,
@@ -316,11 +316,21 @@ class IncrementalCompiler {
   }) async {
     final outputDir = Directory('.dart_tool/fletch_dev_tools')
       ..createSync(recursive: true);
+
+    final resolvedPackageConfigPath = _resolvePackageConfigPath();
+    if (resolvedPackageConfigPath == null) {
+      throw StateError(
+        'Could not locate package_config.json for incremental compiler.\n'
+        'Checked near entrypoint and current working directory.\n'
+        'Pass packageConfigPath explicitly when constructing IncrementalCompiler.',
+      );
+    }
+
     final options = IncrementalCompilerStartOptions(
       entryPoint: _entryPoint,
       outputDillPath: '${outputDir.path}/incremental.dill',
       platformKernelPath: _platformKernelPath(),
-      packageConfigPath: _packageConfigPath,
+      packageConfigPath: resolvedPackageConfigPath,
       verbose: _verbose,
     );
     final client = await _clientFactory(options);
@@ -329,8 +339,13 @@ class IncrementalCompiler {
     if (baseline.errorCount > 0) {
       await _rejectWithBestEffort(client);
       if (throwOnBaselineError) {
+        final diagnostics = _boundDiagnostics(baseline.compilerOutputLines);
+        final sample = diagnostics.isEmpty
+            ? ''
+            : '\nDiagnostics:\n${diagnostics.map((d) => '  $d').join('\n')}';
         throw StateError(
-          'Initial incremental compile failed with ${baseline.errorCount} error(s).',
+          'Initial incremental compile failed with ${baseline.errorCount} error(s).'
+          '$sample',
         );
       }
       return client;
@@ -389,6 +404,37 @@ class IncrementalCompiler {
     final sdkBin = File(Platform.resolvedExecutable).parent;
     final sdkDir = sdkBin.parent.path;
     return '$sdkDir/lib/_internal/vm_platform_strong.dill';
+  }
+
+  String? _resolvePackageConfigPath() {
+    if (_packageConfigPath != null && _packageConfigPath!.isNotEmpty) {
+      final explicit = File(_packageConfigPath!);
+      if (explicit.existsSync()) {
+        return explicit.absolute.path;
+      }
+    }
+
+    final entryFile = File(_entryPoint).absolute;
+    final fromEntry = _findUpwardPackageConfig(entryFile.parent);
+    if (fromEntry != null) return fromEntry;
+
+    final fromCwd = _findUpwardPackageConfig(Directory.current);
+    if (fromCwd != null) return fromCwd;
+
+    return null;
+  }
+
+  String? _findUpwardPackageConfig(Directory start) {
+    var current = start.absolute;
+    while (true) {
+      final candidate = File('${current.path}/.dart_tool/package_config.json');
+      if (candidate.existsSync()) {
+        return candidate.absolute.path;
+      }
+      final parent = current.parent;
+      if (parent.path == current.path) return null;
+      current = parent;
+    }
   }
 
   static Future<IncrementalCompilerClient> _startFrontendClient(

@@ -263,6 +263,71 @@ void main() {
         throwsArgumentError,
       );
     });
+
+    test('resolves package_config from entrypoint ancestry when cwd differs',
+        () async {
+      final workspace =
+          await Directory.systemTemp.createTemp('fletch_ic_pkgcfg_');
+      final appRoot = Directory('${workspace.path}/my_app');
+      final binDir = Directory('${appRoot.path}/bin');
+      final dartToolDir = Directory('${appRoot.path}/.dart_tool');
+      await binDir.create(recursive: true);
+      await dartToolDir.create(recursive: true);
+
+      final packageConfig = File('${dartToolDir.path}/package_config.json');
+      await packageConfig.writeAsString('{"configVersion":2,"packages":[]}');
+
+      final entry = File('${binDir.path}/main.dart');
+      await entry.writeAsString('void main() {}');
+
+      final cwd = Directory.current;
+      final outsideCwd =
+          await Directory.systemTemp.createTemp('fletch_ic_other_cwd_');
+
+      IncrementalCompilerStartOptions? capturedOptions;
+      final client = _FakeCompilerClient(
+        compileActions: [
+          IncrementalCompilerCompileOutput(
+            errorCount: 0,
+            compilerOutputLines: ['baseline ok'],
+          ),
+          IncrementalCompilerCompileOutput(
+            errorCount: 0,
+            compilerOutputLines: ['compile ok'],
+          ),
+        ],
+      );
+
+      try {
+        Directory.current = outsideCwd;
+
+        final compiler = IncrementalCompiler(
+          entryPoint: entry.path,
+          clientFactory: (options) async {
+            capturedOptions = options;
+            return client;
+          },
+        );
+
+        await compiler.start();
+        await compiler.compileInvalidated([entry.path]);
+        await compiler.stop();
+
+        expect(capturedOptions, isNotNull);
+        expect(
+          capturedOptions!.packageConfigPath,
+          packageConfig.absolute.path,
+        );
+      } finally {
+        Directory.current = cwd;
+        if (outsideCwd.existsSync()) {
+          await outsideCwd.delete(recursive: true);
+        }
+        if (workspace.existsSync()) {
+          await workspace.delete(recursive: true);
+        }
+      }
+    });
   });
 }
 

@@ -1,5 +1,66 @@
 # AST Integration - Testing Steps
 
+## Benchmark: `hotreloader` vs `fletch_dev_tools`
+
+This repo includes a process-level comparison benchmark script at:
+
+`tool/benchmark_hotreloader_comparison.dart`
+
+It runs both implementations against equivalent synthetic edit workloads and prints:
+- human-readable summary (min/p50/p95/max/mean)
+- machine-readable JSON line (`JSON_RESULT: ...`)
+
+### Prerequisites
+
+```bash
+cd /Users/kartik/StudioProjects/dart_express/packages/fletch_dev_tools
+dart pub get
+```
+
+### Run benchmark (default)
+
+```bash
+dart run tool/benchmark_hotreloader_comparison.dart
+```
+
+Default config:
+- `runs=5`
+- `edits=8`
+- `fixture=both` (`body` + `route`)
+
+### Run benchmark (custom)
+
+```bash
+dart run tool/benchmark_hotreloader_comparison.dart --runs=3 --edits=10 --fixture=body
+dart run tool/benchmark_hotreloader_comparison.dart --runs=3 --edits=10 --fixture=route
+dart run tool/benchmark_hotreloader_comparison.dart --runs=3 --edits=10 --fixture=both
+```
+
+### How to interpret output
+
+You’ll see blocks like:
+
+- `fletch_dev_tools: n=... p50=... p95=...`
+- `hotreloader:      n=... p50=... p95=...`
+- `p50 ratio (fletch/hotreloader): X.XXx`
+
+Interpretation:
+- ratio `< 1.00x`: `fletch_dev_tools` faster on p50
+- ratio `> 1.00x`: `hotreloader` faster on p50
+
+Use both `p50` and `p95`:
+- `p50` = typical latency
+- `p95` = tail latency / consistency under bursts
+
+### Notes
+
+- This is an end-to-end benchmark (file write → observed reload/restart outcome line).
+- `fletch_dev_tools` may use hot reload or restart depending on classification.
+- `hotreloader` path measures VM hot reload behavior in-process.
+- For stable comparisons, close other CPU-heavy apps and rerun multiple times.
+
+---
+
 ## Setup
 
 ```bash

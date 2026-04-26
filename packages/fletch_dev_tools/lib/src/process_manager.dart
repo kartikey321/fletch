@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+/// Hook used by tests to observe restart lifecycle transitions.
+typedef ProcessManagerRestartHook = void Function(String phase);
+
 /// Manages the lifecycle of a Dart process for the dev server.
 class ProcessManager {
   Process? _process;
@@ -10,11 +13,17 @@ class ProcessManager {
   Uri? _vmServiceUri;
   File? _serviceInfoFile;
 
+  final ProcessManagerRestartHook? _onRestartLifecycle;
+
+  bool _restartInProgress = false;
+
   ProcessManager({
     required String entryPoint,
     required int port,
+    ProcessManagerRestartHook? onRestartLifecycle,
   })  : _entryPoint = entryPoint,
-        _port = port;
+        _port = port,
+        _onRestartLifecycle = onRestartLifecycle;
 
   /// The VM service URI for the currently running child process (if available).
   Uri? get vmServiceUri => _vmServiceUri;
@@ -102,12 +111,32 @@ class ProcessManager {
   }
 
   /// Restart the process (stop then start).
+  ///
+  /// Restart calls are de-duplicated: if a restart is already in progress,
+  /// additional calls are ignored.
   Future<void> restart() async {
+    if (_restartInProgress) {
+      _onRestartLifecycle?.call('dedup-skipped');
+      print('⏭️  Restart already in progress, skipping duplicate request');
+      return;
+    }
+
+    _restartInProgress = true;
+    _onRestartLifecycle?.call('begin');
+
     final stopwatch = Stopwatch()..start();
-    await stop();
-    await start();
-    stopwatch.stop();
-    print('⚡ Restarted in ${stopwatch.elapsedMilliseconds}ms');
+    try {
+      _onRestartLifecycle?.call('stop');
+      await stop();
+      _onRestartLifecycle?.call('start');
+      await start();
+      stopwatch.stop();
+      _onRestartLifecycle?.call('done');
+      print('⚡ Restarted in ${stopwatch.elapsedMilliseconds}ms');
+    } finally {
+      _restartInProgress = false;
+      _onRestartLifecycle?.call('idle');
+    }
   }
 
   /// Check if process is running.
