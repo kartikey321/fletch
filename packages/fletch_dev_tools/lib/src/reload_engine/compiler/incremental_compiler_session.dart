@@ -407,8 +407,9 @@ class IncrementalCompiler {
   }
 
   String? _resolvePackageConfigPath() {
-    if (_packageConfigPath != null && _packageConfigPath!.isNotEmpty) {
-      final explicit = File(_packageConfigPath!);
+    final configuredPath = _packageConfigPath;
+    if (configuredPath != null && configuredPath.isNotEmpty) {
+      final explicit = File(configuredPath);
       if (explicit.existsSync()) {
         return explicit.absolute.path;
       }
