@@ -18,14 +18,16 @@ void main() {
       );
       harness = TestServerHarness(app: app);
 
+      final started = Completer<void>();
       final completer = Completer<void>();
       harness!.app.get('/slow', (req, res) async {
+        started.complete(); // handler entered; request is now in-flight
         await completer.future;
         res.text('done');
       });
 
       final responseFuture = harness!.get('/slow');
-      await Future.delayed(const Duration(milliseconds: 50));
+      await started.future;
 
       final closeFuture = harness!.app.close();
 

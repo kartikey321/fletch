@@ -28,17 +28,6 @@ class _RoutePattern {
     return _RoutePattern(regex, paramNames);
   }
 
-  bool matches(String path) => regex.hasMatch(path);
-
-  Map<String, String> extractParams(String path) {
-    final match = regex.firstMatch(path);
-    if (match == null) return {};
-    final params = <String, String>{};
-    for (var i = 0; i < paramNames.length; i++) {
-      params[paramNames[i]] = match.group(i + 1)!;
-    }
-    return params;
-  }
 }
 
 class _RouteEntry {
@@ -58,12 +47,20 @@ class _RouteEntry {
         pattern = _RoutePattern.parse(prefix!),
         handler = ((req, res) => Future.value());
 
-  bool matches(String method, String path) {
-    if (isolatedRouter != null) {
-      return path.startsWith(prefix!);
+  /// Matches method+path in a single regex pass and returns a [RouteMatch]
+  /// directly, avoiding the redundant second [extractParams] call.
+  RouteMatch? tryMatch(String method, String path) {
+    if (this.method != method) return null;
+    final regexMatch = pattern.regex.firstMatch(path);
+    if (regexMatch == null) return null;
+    // No params on this route — reuse the shared empty map, zero allocation.
+    if (pattern.paramNames.isEmpty) {
+      return RouteMatch(handler);
     }
-    return this.method == method && pattern.matches(path);
+    final params = <String, String>{};
+    for (var i = 0; i < pattern.paramNames.length; i++) {
+      params[pattern.paramNames[i]] = regexMatch.group(i + 1)!;
+    }
+    return RouteMatch(handler, pathParams: params);
   }
-
-  Map<String, String> extractParams(String path) => pattern.extractParams(path);
 }
