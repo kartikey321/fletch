@@ -94,11 +94,25 @@ void main() {
       expect(() => app.reassemble(), returnsNormally);
     });
 
-    test('hotReload() registers factory; reassemble() re-registers routes', () async {
+    test(
+        'hotReload() registers factory; reassemble() re-registers routes '
+        'and clears global middleware registered by the factory',
+        () async {
+      // dart:developer.registerExtension is isolate-global and
+      // Fletch.hotReload() has no duplicate-registration guard (unlike
+      // fletch_dev_tools' addon, which does) — calling hotReload() on a
+      // second Fletch instance in this isolate throws "already registered".
+      // So this file exercises hotReload()/reassemble() through exactly one
+      // app instance across everything it needs to check.
       final app = Fletch();
       var handlerBody = 'v1';
+      var callCount = 0;
 
       void registerRoutes(Fletch a) {
+        a.use((req, res, next) async {
+          callCount++;
+          await next();
+        });
         a.get('/version', (req, res) => res.text(handlerBody));
       }
 
@@ -111,12 +125,17 @@ void main() {
         final port = server.port;
         final r1 = await http.get(Uri.parse('http://localhost:$port/version'));
         expect(r1.body, 'v1');
+        expect(callCount, 1);
 
         handlerBody = 'v2';
         app.reassemble();
 
         final r2 = await http.get(Uri.parse('http://localhost:$port/version'));
         expect(r2.body, 'v2');
+        // If reassemble() only cleared routes (not middleware), the
+        // original middleware would still be registered alongside the
+        // freshly re-registered one, and this would be 3 (1 + 2).
+        expect(callCount, 2);
       } finally {
         await app.close();
         await server.close(force: true);

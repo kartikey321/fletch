@@ -116,6 +116,39 @@ void main() {
       expect(second.body, contains('"visited":"yes"'));
     });
 
+    test(
+        'a session first touched inside an SSE handler body on a brand-new '
+        'session is discarded instead of persisted unreachably', () async {
+      final store = MemorySessionStore();
+      final app = Fletch(
+        sessionSecret: 'a' * 32,
+        sessionStore: store,
+        secureCookies: false,
+      );
+      final harness = TestServerHarness(app: app);
+      addTearDown(harness.dispose);
+
+      app.get('/stream-session', (req, res) async {
+        await res.sse((sink) async {
+          // First touch of a brand-new session, happening only once send()
+          // is already flushing headers — there's no way to get a
+          // Set-Cookie back to the client for this session, so it must not
+          // be written to the store either (an unreachable row is a leak).
+          req.session['visited'] = 'yes';
+          await sink.sendEvent('done');
+          await sink.close();
+        });
+      });
+
+      expect(store.sessionCount, 0);
+
+      final response = await harness.get('/stream-session');
+
+      expect(response.statusCode, 200);
+      expect(response.headers['set-cookie'], isNull);
+      expect(store.sessionCount, 0);
+    });
+
     test('an exception thrown inside a streaming handler body does not '
         'crash the server or leave it unresponsive', () async {
       harness.app.get('/stream-throws', (req, res) async {

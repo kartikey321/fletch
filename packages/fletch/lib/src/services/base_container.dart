@@ -158,12 +158,18 @@ abstract class BaseContainer {
     _routeFactory = factory;
   }
 
-  /// Clears all registered routes and re-registers them via the factory
-  /// set by [hotReload]. Called by the VM service extension after a
-  /// successful hot reload so updated named handler bodies take effect.
+  /// Clears all registered routes and global middleware, then re-registers
+  /// them via the factory set by [hotReload]. Called by the VM service
+  /// extension after a successful hot reload so updated named handler
+  /// bodies take effect.
+  ///
+  /// Middleware is cleared too (not just routes) so a factory that calls
+  /// `app.use(...)` doesn't accumulate duplicate global middleware on every
+  /// reload cycle.
   void reassemble() {
     if (_routeFactory == null) return;
     router.clear();
+    clearMiddleware();
     _routeFactory!();
   }
 
@@ -173,11 +179,10 @@ abstract class BaseContainer {
   }
 
   /// Wraps [handler] with [routeMiddleware] only. Global middleware is no
-  /// longer applied here — it wraps the entire request dispatch (including
-  /// route resolution, framework error handling, and the response flush)
-  /// from [processRequest] instead, so it can observe unmatched routes
-  /// (404s) and streaming/SSE completion, not just a successfully matched
-  /// handler.
+  /// longer applied here — it wraps route resolution and the handler from
+  /// [processRequest] instead (see that method's doc comment for exactly
+  /// what it does and does not observe), so it can see unmatched routes
+  /// (404s), not just a successfully matched handler.
   @protected
   RequestHandler wrapWithMiddleware(
       RequestHandler handler, List<MiddlewareHandler> routeMiddleware) {
@@ -270,13 +275,25 @@ abstract class BaseContainer {
   /// Executes middleware + handler pipeline for a prepared [request] and
   /// [response]. If a route does not complete the response, it is sent here.
   ///
-  /// Global middleware wraps the entire dispatch below — route resolution,
-  /// route middleware, the handler, and the response flush — so it can
-  /// observe unmatched routes (404s) and streaming/SSE completion, not just
-  /// a successfully matched handler. The session store write only runs
-  /// after the flush attempt (in `finally`), since streaming/SSE handler
-  /// bodies only actually execute inside [Response.send], not when the
-  /// route handler returns.
+  /// Global middleware wraps route resolution, route middleware, and the
+  /// handler, so `next()` now observes unmatched routes (404s) and
+  /// exceptions thrown while the handler *sets up* its response — not just
+  /// a successfully matched handler returning normally.
+  ///
+  /// It does **not** wrap [Response.send] — the actual flush (headers +
+  /// body, and for SSE/streaming responses, the handler body that only runs
+  /// during `send()`) happens after `await next()` has already returned to
+  /// the outermost middleware. Middleware cannot observe streaming
+  /// completion or errors thrown from inside an SSE handler body; those are
+  /// caught here and logged instead (see the `else` branch below). Fixing
+  /// that fully would require nesting the flush *inside* the awaited
+  /// dispatch chain, which would also pull it inside [dispatchTimeout] and
+  /// reintroduce the stream-truncation problem this scoping exists to avoid
+  /// — a real tradeoff, not addressed by this change.
+  ///
+  /// The session store write only runs after the flush attempt (in
+  /// `finally`), since streaming/SSE handler bodies only actually execute
+  /// inside [Response.send], not when the route handler returns.
   ///
   /// [dispatchTimeout], if provided, bounds only route resolution + route
   /// middleware + the handler — deliberately *not* the response flush.
@@ -284,6 +301,15 @@ abstract class BaseContainer {
   /// and do their actual work inside `send()`; scoping the timeout this way
   /// preserves long-lived streams instead of cutting them off once
   /// `response.send()` is properly awaited (see [Fletch.handleRequest]).
+  ///
+  /// Known limitation: `Future.timeout()` cannot cancel the original
+  /// dispatch future. If it fires, the abandoned dispatch keeps running in
+  /// the background and may still mutate `request`/`response` state after
+  /// the 408 has already been sent and (if the session was already touched)
+  /// after the `finally` block below has already run `session.save()` —
+  /// that later mutation has no corresponding save and is silently lost.
+  /// This is a general Dart limitation, not something scoping the timeout
+  /// here can fix.
   @protected
   Future<void> processRequest(
     Request request,
@@ -346,10 +372,38 @@ abstract class BaseContainer {
       // the flush attempt so mutations made inside a streaming/SSE handler
       // body (which only runs during `send`) are captured.
       if (request.sessionTouched) {
-        try {
-          await request.session.save();
-        } catch (e, stack) {
-          logger.e('Failed to save session', error: e, stackTrace: stack);
+        final session = request.session;
+        // `sessionTouched` fires on any `request.session` access, including
+        // incidental reads that don't mutate anything (e.g. IsolatedContainer's
+        // routing delegate reads `.session.id` for every mounted request
+        // regardless of whether the handler uses sessions at all). Only a
+        // session with real, unsaved changes is actually at risk of being
+        // silently lost or unreachably persisted below.
+        if (session.isDirty &&
+            (request.isNewSession || session.wasRegenerated) &&
+            !response.hasCookie(Request.sessionCookieName)) {
+          // Session data was set (or the session was regenerated) *after*
+          // headers were already flushed — e.g. inside an SSE/stream handler
+          // body, which only runs during `send()`, by which point
+          // _applySessionCookie's pre-send check already ran and saw an
+          // untouched session. There is no way to get a Set-Cookie onto a
+          // response whose headers are already on the wire, so the client
+          // can never present this session ID again. Persisting it anyway
+          // would just leak an unreachable row into the session store.
+          logger.w(
+              'Session data set after response headers were already sent for '
+              '${request.method} ${request.uri.path} (e.g. inside an SSE or '
+              'streaming handler body on a brand-new/regenerated session) — '
+              'no Set-Cookie could be issued, so this session is discarded '
+              'instead of being persisted unreachably.');
+        } else {
+          try {
+            // No-ops internally if the session was touched but never
+            // actually marked dirty (isDirty guard inside Session.save()).
+            await session.save();
+          } catch (e, stack) {
+            logger.e('Failed to save session', error: e, stackTrace: stack);
+          }
         }
       }
     }
@@ -382,7 +436,9 @@ abstract class BaseContainer {
 
   /// Runs global middleware around route resolution + the matched handler
   /// (or throws [NotFoundError] for an unmatched route), so global
-  /// middleware can observe both outcomes.
+  /// middleware can observe both outcomes. Resolves once the handler
+  /// function *returns* — for SSE/streaming routes that's before the
+  /// actual streamed work runs (see [processRequest]'s doc comment).
   Future<void> _dispatchThroughGlobalMiddleware(
       Request request, Response response) {
     if (_middleware.isEmpty) {
