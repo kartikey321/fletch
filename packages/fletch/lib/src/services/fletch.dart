@@ -254,7 +254,7 @@ class Fletch extends BaseContainer {
   final Map<HttpServer, Future<void>> _serverLifecycles = {};
 
   @override
-  Future<void> handleRequest(HttpRequest httpRequest) {
+  Future<void> handleRequest(HttpRequest httpRequest) async {
     final request = Request.from(
       httpRequest,
       container: container,
@@ -263,7 +263,12 @@ class Fletch extends BaseContainer {
       sessionSigner: sessionSigner,
       sessionStore: sessionStore,
     );
-    return processRequest(request, Response());
+    final response = Response();
+    // requestTimeout bounds dispatch (routing/middleware/handler) only, not
+    // the response flush — see BaseContainer.processRequest's doc comment.
+    // Passing null (the "disable timeout" configuration) skips the
+    // .timeout() wrapper entirely, so no Timer is allocated either way.
+    await processRequest(request, response, dispatchTimeout: requestTimeout);
   }
 
   /// Binds an [HttpServer] on the provided [port] (and optional [address]) and
@@ -606,7 +611,7 @@ class Fletch extends BaseContainer {
     }
   }
 
-  Future<void> _handleRequestWithTimeout(HttpRequest httpRequest) {
+  Future<void> _handleRequestWithTimeout(HttpRequest httpRequest) async {
     // Reject new requests during shutdown
     if (_isShuttingDown) {
       httpRequest.response
@@ -614,25 +619,23 @@ class Fletch extends BaseContainer {
         ..headers.add('Connection', 'close')
         ..write('Server is shutting down')
         ..close();
-      return Future.value();
+      return;
     }
 
     _activeRequests++;
 
-    // Build the work future: with or without timeout.
-    // Avoid async/await here so no extra Future wrapper is allocated on the
-    // hot path — handleRequest()'s own Future is returned directly.
-    final work = requestTimeout != null
-        ? handleRequest(httpRequest).timeout(
-            requestTimeout!,
-            onTimeout: () => throw HttpError(408, 'Request Timeout'),
-          )
-        : handleRequest(httpRequest);
-
-    return work
-        .catchError((Object error, StackTrace stackTrace) =>
-            _safelySendErrorResponse(httpRequest, error, stackTrace))
-        .whenComplete(() => _activeRequests--);
+    try {
+      // requestTimeout is now enforced inside processRequest, scoped to
+      // dispatch only, so it doesn't cut off an already-awaited streaming
+      // response (see handleRequest above). This try/catch remains as a
+      // last-resort safety net for anything that escapes processRequest's
+      // own error handling entirely.
+      await handleRequest(httpRequest);
+    } catch (error, stackTrace) {
+      await _safelySendErrorResponse(httpRequest, error, stackTrace);
+    } finally {
+      _activeRequests--;
+    }
   }
 
   Future<void> _safelySendErrorResponse(

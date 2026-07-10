@@ -48,6 +48,16 @@ abstract class BaseContainer {
     _middleware.add(middleware);
   }
 
+  /// Removes all globally registered middleware.
+  ///
+  /// Intended for dev-reload tooling that rebuilds route/middleware
+  /// registration from scratch: pairs with [RouterInterface.clear] so a
+  /// reassembled app doesn't accumulate duplicate global middleware on
+  /// every reload cycle.
+  void clearMiddleware() {
+    _middleware.clear();
+  }
+
   /// Mounts a [Controller] at the specified [prefix] path.
   ///
   /// All routes registered in the controller will be prefixed with [prefix].
@@ -162,37 +172,25 @@ abstract class BaseContainer {
     _errorHandler = handler;
   }
 
+  /// Wraps [handler] with [routeMiddleware] only. Global middleware is no
+  /// longer applied here — it wraps the entire request dispatch (including
+  /// route resolution, framework error handling, and the response flush)
+  /// from [processRequest] instead, so it can observe unmatched routes
+  /// (404s) and streaming/SSE completion, not just a successfully matched
+  /// handler.
   @protected
   RequestHandler wrapWithMiddleware(
       RequestHandler handler, List<MiddlewareHandler> routeMiddleware) {
-    // Fast path: no route-level middleware. Check global middleware at call
-    // time (it can be added after route registration via app.use()).
+    // Fast path: no route-level middleware — return the handler directly,
+    // zero-overhead, non-async.
     if (routeMiddleware.isEmpty) {
-      // Non-async: the handler's own Future is returned directly with no extra
-      // wrapping. When _middleware is empty the whole call is zero-overhead.
-      return (Request request, Response response) {
-        if (_middleware.isEmpty) {
-          return handler(request, response);
-        }
-        int index = 0;
-        FutureOr<void> runNext() {
-          if (index < _middleware.length) {
-            return _middleware[index++](request, response, runNext);
-          }
-          return handler(request, response);
-        }
-        return runNext();
-      };
+      return handler;
     }
 
     // Route has its own middleware — full chain, still non-async.
     return (Request request, Response response) {
-      int globalIndex = 0;
       int routeIndex = 0;
       FutureOr<void> runNext() {
-        if (globalIndex < _middleware.length) {
-          return _middleware[globalIndex++](request, response, runNext);
-        }
         if (routeIndex < routeMiddleware.length) {
           return routeMiddleware[routeIndex++](request, response, runNext);
         }
@@ -258,20 +256,40 @@ abstract class BaseContainer {
   /// resolving routes, executing middleware/handlers and finally flushing the
   /// response (including error handling and session propagation).
   @protected
-  Future<void> handleRequest(HttpRequest httpRequest) {
+  Future<void> handleRequest(HttpRequest httpRequest) async {
     final request = Request.from(
       httpRequest,
       container: container,
       sessionSigner: sessionSigner,
       sessionStore: sessionStore,
     );
-    return processRequest(request, Response());
+    final response = Response();
+    await processRequest(request, response);
   }
 
   /// Executes middleware + handler pipeline for a prepared [request] and
   /// [response]. If a route does not complete the response, it is sent here.
+  ///
+  /// Global middleware wraps the entire dispatch below — route resolution,
+  /// route middleware, the handler, and the response flush — so it can
+  /// observe unmatched routes (404s) and streaming/SSE completion, not just
+  /// a successfully matched handler. The session store write only runs
+  /// after the flush attempt (in `finally`), since streaming/SSE handler
+  /// bodies only actually execute inside [Response.send], not when the
+  /// route handler returns.
+  ///
+  /// [dispatchTimeout], if provided, bounds only route resolution + route
+  /// middleware + the handler — deliberately *not* the response flush.
+  /// Streaming/SSE handlers only configure themselves during dispatch (fast)
+  /// and do their actual work inside `send()`; scoping the timeout this way
+  /// preserves long-lived streams instead of cutting them off once
+  /// `response.send()` is properly awaited (see [Fletch.handleRequest]).
   @protected
-  Future<void> processRequest(Request request, Response response) async {
+  Future<void> processRequest(
+    Request request,
+    Response response, {
+    Duration? dispatchTimeout,
+  }) async {
     // Only eagerly load session for returning visitors — new sessions have no
     // stored data so the load is always a no-op and we can skip the I/O.
     if (!request.isNewSession) {
@@ -292,52 +310,104 @@ abstract class BaseContainer {
     }
 
     try {
-      final resolvedPath = resolveRoutePath(request);
-      final routeMatch = router.findRoute(request.method, resolvedPath);
-      request.params = routeMatch?.pathParams ?? {};
-      if (routeMatch != null) {
-        await routeMatch.handler(request, response);
+      final dispatch = _dispatchThroughGlobalMiddleware(request, response);
+      if (dispatchTimeout != null) {
+        await dispatch.timeout(
+          dispatchTimeout,
+          onTimeout: () => throw HttpError(408, 'Request Timeout'),
+        );
       } else {
-        throw NotFoundError('Route not found: $resolvedPath');
+        await dispatch;
+      }
+      if (!response.isSent) {
+        _applySessionCookie(request, response);
+        await response.send(request.httpRequest.response);
       }
     } catch (error, stackTrace) {
-      await handleError(error, request, response, stackTrace);
-    }
-
-    // Only perform session persistence if the handler (or its middleware)
-    // actually touched req.session — skips all cookie + store work on routes
-    // that never need a session (e.g. health checks, public API endpoints).
-    if (request.sessionTouched) {
-      final session = request.session;
-
-      // Emit Set-Cookie when: (a) brand-new session, or (b) session was
-      // regenerated (new ID after privilege escalation, e.g. login).
-      final needsCookie = (request.isNewSession || session.wasRegenerated) &&
-          !response.hasCookie(Request.sessionCookieName);
-      if (needsCookie) {
-        String cookieValue = session.id;
-        if (request.sessionSigner != null) {
-          cookieValue = request.sessionSigner!.sign(session.id);
+      if (!response.isSent) {
+        await handleError(error, request, response, stackTrace);
+        if (!response.isSent) {
+          _applySessionCookie(request, response);
+          await response.send(request.httpRequest.response);
         }
-        response.cookie(
-          Request.sessionCookieName,
-          cookieValue,
-          secure: secureCookies,
-          httpOnly: true,
-          sameSite: SameSite.lax,
-        );
+      } else {
+        // Response already started flushing (e.g. a streaming/SSE handler
+        // threw after writing began) — headers/status are already on the
+        // wire, so there's nothing left to send. Surface the failure
+        // instead of letting it escape uncaught.
+        logger.e('Error after response flush began for ${request.method} '
+            '${request.uri.path}',
+            error: error, stackTrace: stackTrace);
       }
-
-      // Save session data to store if modified
-      try {
-        await session.save();
-      } catch (e, stack) {
-        logger.e('Failed to save session', error: e, stackTrace: stack);
+    } finally {
+      // Only perform the session store write if the handler (or its
+      // middleware) actually touched req.session — skips store I/O on
+      // routes that never need a session (e.g. health checks). Runs after
+      // the flush attempt so mutations made inside a streaming/SSE handler
+      // body (which only runs during `send`) are captured.
+      if (request.sessionTouched) {
+        try {
+          await request.session.save();
+        } catch (e, stack) {
+          logger.e('Failed to save session', error: e, stackTrace: stack);
+        }
       }
     }
+  }
 
-    if (!response.isSent) {
-      await response.send(request.httpRequest.response);
+  /// Sets the session cookie when needed: a brand-new session, or one that
+  /// was regenerated (new ID after privilege escalation, e.g. login). Must
+  /// run before [Response.send] — cookies can't be added once headers are
+  /// flushed — so this is called right before each `send()` call site
+  /// rather than deferred to the post-flush session-save step.
+  void _applySessionCookie(Request request, Response response) {
+    if (!request.sessionTouched) return;
+    final session = request.session;
+    final needsCookie = (request.isNewSession || session.wasRegenerated) &&
+        !response.hasCookie(Request.sessionCookieName);
+    if (!needsCookie) return;
+
+    String cookieValue = session.id;
+    if (request.sessionSigner != null) {
+      cookieValue = request.sessionSigner!.sign(session.id);
+    }
+    response.cookie(
+      Request.sessionCookieName,
+      cookieValue,
+      secure: secureCookies,
+      httpOnly: true,
+      sameSite: SameSite.lax,
+    );
+  }
+
+  /// Runs global middleware around route resolution + the matched handler
+  /// (or throws [NotFoundError] for an unmatched route), so global
+  /// middleware can observe both outcomes.
+  Future<void> _dispatchThroughGlobalMiddleware(
+      Request request, Response response) {
+    if (_middleware.isEmpty) {
+      return _resolveAndDispatch(request, response);
+    }
+    int globalIndex = 0;
+    Future<void> runNextMiddleware() async {
+      if (globalIndex < _middleware.length) {
+        await _middleware[globalIndex++](request, response, runNextMiddleware);
+        return;
+      }
+      await _resolveAndDispatch(request, response);
+    }
+
+    return runNextMiddleware();
+  }
+
+  Future<void> _resolveAndDispatch(Request request, Response response) async {
+    final resolvedPath = resolveRoutePath(request);
+    final routeMatch = router.findRoute(request.method, resolvedPath);
+    request.params = routeMatch?.pathParams ?? {};
+    if (routeMatch != null) {
+      await routeMatch.handler(request, response);
+    } else {
+      throw NotFoundError('Route not found: $resolvedPath');
     }
   }
 
