@@ -310,6 +310,18 @@ abstract class BaseContainer {
   /// that later mutation has no corresponding save and is silently lost.
   /// This is a general Dart limitation, not something scoping the timeout
   /// here can fix.
+  ///
+  /// For a route mounted via `IsolatedContainer`, "the handler" from this
+  /// method's perspective is actually a full nested `processRequest` call
+  /// (including its own flush) — so if [dispatchTimeout] fires while that's
+  /// still running, this method returns (and, via [Fletch]'s caller,
+  /// decrements its active-request count) before the real nested work
+  /// finishes, not when it actually finishes. The `response.isSent` check
+  /// on the timeout callback avoids a false-positive error log in that
+  /// case, but doesn't make this method wait for the abandoned nested call
+  /// — graceful-shutdown accounting can still under-count in-flight work
+  /// for slow isolated-container routes. This is the same underlying
+  /// limitation as above, just more visible through that nesting.
   @protected
   Future<void> processRequest(
     Request request,
@@ -340,7 +352,21 @@ abstract class BaseContainer {
       if (dispatchTimeout != null) {
         await dispatch.timeout(
           dispatchTimeout,
-          onTimeout: () => throw HttpError(408, 'Request Timeout'),
+          onTimeout: () {
+            // A mounted IsolatedContainer route runs its own full nested
+            // processRequest — including its send() — as "the handler"
+            // from this method's perspective, so response.isSent can
+            // already be true by the time this timer fires (SSE/stream
+            // routes flip it almost immediately, long before the real
+            // work finishes). Sending a 408 is already impossible at that
+            // point (headers are on the wire), and treating it as a
+            // timeout error would just produce a false-positive error log
+            // for a request that's actually still succeeding in the
+            // background — so only treat this as a real timeout when
+            // nothing has been sent yet.
+            if (response.isSent) return;
+            throw HttpError(408, 'Request Timeout');
+          },
         );
       } else {
         await dispatch;
@@ -386,16 +412,39 @@ abstract class BaseContainer {
           // headers were already flushed — e.g. inside an SSE/stream handler
           // body, which only runs during `send()`, by which point
           // _applySessionCookie's pre-send check already ran and saw an
-          // untouched session. There is no way to get a Set-Cookie onto a
-          // response whose headers are already on the wire, so the client
-          // can never present this session ID again. Persisting it anyway
-          // would just leak an unreachable row into the session store.
-          logger.w(
-              'Session data set after response headers were already sent for '
-              '${request.method} ${request.uri.path} (e.g. inside an SSE or '
-              'streaming handler body on a brand-new/regenerated session) — '
-              'no Set-Cookie could be issued, so this session is discarded '
-              'instead of being persisted unreachably.');
+          // untouched/unregenerated session. There is no way to get a
+          // Set-Cookie onto a response whose headers are already on the
+          // wire, so the client can never present this session ID again.
+          // Persisting it anyway would just leak an unreachable row into
+          // the session store, so it's discarded instead.
+          if (session.wasRegenerated) {
+            // regenerate() destroys the *old* session record as an
+            // immediate, unconditional side effect (by design — it's a
+            // session-fixation defense, invalidating the old ID as fast as
+            // possible). If regenerate() was called from inside an SSE/
+            // stream handler body, that destroy already happened before we
+            // get here, and — unlike the brand-new-session case above —
+            // there's no way to recover it: this is real, previously-
+            // reachable user data that's now gone, not just a session that
+            // was never reachable to begin with. Log it as an error, not a
+            // routine warning.
+            logger.e(
+                'Session was regenerated after response headers were '
+                'already sent for ${request.method} ${request.uri.path} '
+                '(session.regenerate() called inside an SSE or streaming '
+                'handler body) — the previous session was already '
+                'destroyed and the new one cannot be made reachable '
+                '(no Set-Cookie could be issued). This is real data loss, '
+                'not a harmless discard: avoid calling regenerate() from '
+                'inside a streaming handler body.');
+          } else {
+            logger.w(
+                'Session data set after response headers were already sent '
+                'for ${request.method} ${request.uri.path} (e.g. inside an '
+                'SSE or streaming handler body on a brand-new session) — no '
+                'Set-Cookie could be issued, so this session is discarded '
+                'instead of being persisted unreachably.');
+          }
         } else {
           try {
             // No-ops internally if the session was touched but never
@@ -444,10 +493,20 @@ abstract class BaseContainer {
     if (_middleware.isEmpty) {
       return _resolveAndDispatch(request, response);
     }
+    // Snapshot rather than reading `_middleware` live: [reassemble] (or
+    // [clearMiddleware] + re-registration in dev-reload tooling) can clear
+    // and repopulate it between this request's `await` points. Without a
+    // snapshot, a request paused mid-chain would resume indexing into
+    // whatever the list has become — skipping middleware, or running a
+    // different reload cycle's middleware for the rest of its own chain.
+    // A snapshot means this request sees one consistent list for its whole
+    // lifetime; only requests that start after the swap see the new one.
+    final middlewareSnapshot = List<MiddlewareHandler>.of(_middleware);
     int globalIndex = 0;
     Future<void> runNextMiddleware() async {
-      if (globalIndex < _middleware.length) {
-        await _middleware[globalIndex++](request, response, runNextMiddleware);
+      if (globalIndex < middlewareSnapshot.length) {
+        await middlewareSnapshot[globalIndex++](
+            request, response, runNextMiddleware);
         return;
       }
       await _resolveAndDispatch(request, response);

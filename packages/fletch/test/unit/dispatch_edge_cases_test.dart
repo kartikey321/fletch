@@ -129,6 +129,44 @@ void main() {
       expect(read.body, contains('"before":"yes"'));
       expect(read.body, contains('"late":null'));
     });
+
+    test(
+        'a slow SSE route mounted via IsolatedContainer still completes '
+        'successfully despite a short requestTimeout, instead of a '
+        'false-positive 408', () async {
+      // A mounted route's "handler" (from dispatchTimeout's perspective) is
+      // a full nested processRequest call, including its own send() — for
+      // an SSE route, response.isSent flips true almost immediately (SSE
+      // setup is fast), long before the timeout fires. Without the
+      // response.isSent check in processRequest's onTimeout callback, that
+      // combination used to produce a spurious "Error after response flush
+      // began ... 408 Request Timeout" log for a request that was actually
+      // completing normally.
+      final app = Fletch(
+        requestTimeout: const Duration(milliseconds: 40),
+        secureCookies: false,
+      );
+      final sub = IsolatedContainer(prefix: '/v1');
+      sub.get('/events', (req, res) async {
+        await res.sse((sink) async {
+          for (var i = 0; i < 3; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 30));
+            await sink.sendEvent('tick-$i');
+          }
+          await sink.close();
+        });
+      });
+      sub.mount(app);
+      final harness = TestServerHarness(app: app);
+      addTearDown(harness.dispose);
+
+      // Total stream time (~90ms) exceeds requestTimeout (40ms).
+      final response = await harness.get('/v1/events');
+      expect(response.statusCode, 200);
+      expect(response.body, contains('tick-0'));
+      expect(response.body, contains('tick-1'));
+      expect(response.body, contains('tick-2'));
+    });
   });
 
   group('KNOWN LIMITATION: global middleware does not observe the response '
@@ -234,5 +272,136 @@ void main() {
     // false, so a session first created via a mounted route never gets a
     // Set-Cookie at all) that's out of scope for this branch — tracked
     // separately, not fixed here.
+  });
+
+  group('session.regenerate() inside a streaming handler body', () {
+    test(
+        'destroys the previous session with no way to recover it — real '
+        'data loss, not a harmless discard (documented, not fixed: '
+        'regenerate() must destroy the old id immediately for its own '
+        'session-fixation defense to mean anything)', () async {
+      final store = MemorySessionStore();
+      final app = Fletch(
+        sessionSecret: 'a' * 32,
+        sessionStore: store,
+        secureCookies: false,
+      );
+      final harness = TestServerHarness(app: app);
+      addTearDown(harness.dispose);
+
+      app.get('/init', (req, res) {
+        req.session['before'] = 'yes';
+        res.text('ok');
+      });
+      app.get('/stream-regen', (req, res) async {
+        await res.sse((sink) async {
+          // Called from inside an SSE body: _applySessionCookie's pre-send
+          // check already ran and saw wasRegenerated == false, so no
+          // Set-Cookie for the new id can ever be issued — but regenerate()
+          // has already destroyed the *old* id's store record by the time
+          // this line returns.
+          await req.session.regenerate();
+          req.session['after'] = 'yes';
+          await sink.sendEvent('done');
+          await sink.close();
+        });
+      });
+      app.get('/read', (req, res) {
+        res.json({'before': req.session['before']});
+      });
+
+      final init = await harness.get('/init');
+      final cookie = init.headers['set-cookie']!.split(';').first;
+      expect(store.sessionCount, 1);
+
+      final streamed = await harness.get(
+        '/stream-regen',
+        headers: {'Cookie': cookie},
+      );
+      expect(streamed.statusCode, 200);
+      // No new cookie could be issued for the regenerated id.
+      expect(streamed.headers['set-cookie'], isNull);
+
+      // The old session (with 'before') is gone -- regenerate() already
+      // destroyed it -- and the new one was discarded as unreachable, so
+      // the store ends up empty. This is the data-loss finding: fixing it
+      // would mean deferring regenerate()'s destroy, which would weaken
+      // the session-fixation defense it exists to provide.
+      expect(store.sessionCount, 0);
+
+      final readWithOldCookie = await harness.get(
+        '/read',
+        headers: {'Cookie': cookie},
+      );
+      expect(readWithOldCookie.body, contains('"before":null'));
+    });
+  });
+
+  group('reassemble() middleware snapshot', () {
+    test(
+        'a request paused mid-chain sees a consistent middleware list for '
+        'its own lifetime even if a reload cycle runs concurrently, instead '
+        'of resuming into a cleared/repopulated list', () async {
+      // Exercises clearMiddleware() + re-registration directly (what
+      // reassemble() does internally) rather than through
+      // hotReload()/reassemble() themselves — Fletch.hotReload() registers
+      // a process-wide VM service extension with no duplicate-registration
+      // guard, and another test in this suite already calls it once; a
+      // second call in the same isolate would throw. The snapshot fix under
+      // test lives in _dispatchThroughGlobalMiddleware and doesn't care how
+      // clearMiddleware() got invoked.
+      final app = Fletch(secureCookies: false);
+      final resumeSignal = Completer<void>();
+      final secondMiddlewareRan = <String>[];
+
+      app.use((req, res, next) async {
+        secondMiddlewareRan.add('first-cycle-a');
+        await resumeSignal.future; // pauses mid-chain
+        await next();
+        secondMiddlewareRan.add('first-cycle-a-after-next');
+      });
+      app.use((req, res, next) async {
+        secondMiddlewareRan.add('first-cycle-b');
+        await next();
+      });
+      app.get('/ping', (req, res) => res.text('ok'));
+
+      final harness = TestServerHarness(app: app);
+      addTearDown(harness.dispose);
+
+      // Start a request; it pauses inside the first middleware, having
+      // already snapshotted the (2-middleware) list for this dispatch.
+      final inFlight = harness.get('/ping');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      // Simulate a reload cycle running concurrently: clears + replaces
+      // global middleware while the request above is still paused.
+      app.router.clear();
+      app.clearMiddleware();
+      app.get('/ping', (req, res) => res.text('ok'));
+      app.use((req, res, next) async {
+        secondMiddlewareRan.add('second-cycle');
+        await next();
+      });
+
+      resumeSignal.complete();
+      final response = await inFlight;
+
+      expect(response.statusCode, 200);
+      // The in-flight request's own snapshot ran both original-cycle
+      // middlewares (and only those) to completion, unaffected by the
+      // concurrent clear + re-registration.
+      expect(secondMiddlewareRan, [
+        'first-cycle-a',
+        'first-cycle-b',
+        'first-cycle-a-after-next',
+      ]);
+
+      // A fresh request after the swap sees only the new cycle's
+      // middleware.
+      secondMiddlewareRan.clear();
+      await harness.get('/ping');
+      expect(secondMiddlewareRan, ['second-cycle']);
+    });
   });
 }
