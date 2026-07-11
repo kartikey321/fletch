@@ -16,6 +16,7 @@ class IsolatedContainer extends BaseContainer {
   IsolatedContainer({
     String prefix = '',
     super.router,
+    super.secureCookies,
     GetIt? container,
   })  : prefix = _normalizePrefix(prefix),
         super(
@@ -40,7 +41,25 @@ class IsolatedContainer extends BaseContainer {
   /// whose path matches the configured prefix via the parent router. This keeps
   /// path normalisation and parameter extraction consistent with the main
   /// routing strategy.
+  ///
+  /// Sessions created via routes on this container are issued their own
+  /// Set-Cookie using *this container's* [secureCookies] setting, not
+  /// [app]'s — it defaults to `true` regardless of how [app] is configured.
+  /// A mismatch (e.g. `app`'s `secureCookies: false` for local HTTP dev,
+  /// paired with this container's default `true`) means the browser will
+  /// silently discard the cookie over plain HTTP, so sessions touched from
+  /// this container will appear not to persist. Pass a matching
+  /// `secureCookies` value at construction to avoid this.
   void mount(Fletch app) {
+    if (secureCookies != app.secureCookies) {
+      logger.w(
+          'IsolatedContainer mounted at "${prefix.isEmpty ? '/' : prefix}" '
+          'has secureCookies: $secureCookies but the host app has '
+          'secureCookies: ${app.secureCookies}. Session cookies issued from '
+          'this container will use its own setting, not the host app\'s — '
+          'if they mismatch, the browser may silently drop the cookie. '
+          'Pass a matching secureCookies value to IsolatedContainer(...).');
+    }
     final mountPrefix = prefix.isEmpty ? '/' : prefix;
     app.router.addIsolatedRouter(
       mountPrefix,
@@ -70,6 +89,7 @@ class IsolatedContainer extends BaseContainer {
       prefix: newPrefix,
       router: router,
       container: container,
+      secureCookies: secureCookies,
     );
   }
 
@@ -180,6 +200,11 @@ class _IsolatedRouterDelegate implements RouterInterface {
           parentRequest.session.id, // ignored — existingSession takes priority
           parentRequest.requestId,
           container.container,
+          // Without this, isSessionNew defaults to false, so a session
+          // created for the first time via an isolated-container route
+          // would never get a Set-Cookie issued — every request would
+          // silently start a brand-new, unreachable server-side session.
+          isSessionNew: parentRequest.isNewSession,
           existingSession: parentRequest.session, // share loaded session
           sessionSigner: parentRequest.sessionSigner,
         );
