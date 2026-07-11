@@ -261,7 +261,7 @@ abstract class BaseContainer {
   /// resolving routes, executing middleware/handlers and finally flushing the
   /// response (including error handling and session propagation).
   @protected
-  Future<void> handleRequest(HttpRequest httpRequest) async {
+  Future<void> handleRequest(HttpRequest httpRequest) {
     final request = Request.from(
       httpRequest,
       container: container,
@@ -269,7 +269,7 @@ abstract class BaseContainer {
       sessionStore: sessionStore,
     );
     final response = Response();
-    await processRequest(request, response);
+    return processRequest(request, response);
   }
 
   /// Executes middleware + handler pipeline for a prepared [request] and
@@ -503,16 +503,22 @@ abstract class BaseContainer {
     // lifetime; only requests that start after the swap see the new one.
     final middlewareSnapshot = List<MiddlewareHandler>.of(_middleware);
     int globalIndex = 0;
-    Future<void> runNextMiddleware() async {
+    // Non-async, FutureOr-typed — matches NextFunction's own signature so
+    // each middleware hop is a direct pass-through with no extra Future
+    // wrapper, same as wrapWithMiddleware's route-middleware chain below.
+    // Future.sync at the call site is the one place this gets converted
+    // into a genuine Future — needed because processRequest calls
+    // .timeout() on the result, which FutureOr doesn't support — so that
+    // cost is paid once per dispatch, not once per middleware layer.
+    FutureOr<void> runNextMiddleware() {
       if (globalIndex < middlewareSnapshot.length) {
-        await middlewareSnapshot[globalIndex++](
+        return middlewareSnapshot[globalIndex++](
             request, response, runNextMiddleware);
-        return;
       }
-      await _resolveAndDispatch(request, response);
+      return _resolveAndDispatch(request, response);
     }
 
-    return runNextMiddleware();
+    return Future.sync(runNextMiddleware);
   }
 
   Future<void> _resolveAndDispatch(Request request, Response response) async {

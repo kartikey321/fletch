@@ -254,7 +254,7 @@ class Fletch extends BaseContainer {
   final Map<HttpServer, Future<void>> _serverLifecycles = {};
 
   @override
-  Future<void> handleRequest(HttpRequest httpRequest) async {
+  Future<void> handleRequest(HttpRequest httpRequest) {
     final request = Request.from(
       httpRequest,
       container: container,
@@ -268,7 +268,7 @@ class Fletch extends BaseContainer {
     // the response flush — see BaseContainer.processRequest's doc comment.
     // Passing null (the "disable timeout" configuration) skips the
     // .timeout() wrapper entirely, so no Timer is allocated either way.
-    await processRequest(request, response, dispatchTimeout: requestTimeout);
+    return processRequest(request, response, dispatchTimeout: requestTimeout);
   }
 
   /// Binds an [HttpServer] on the provided [port] (and optional [address]) and
