@@ -611,7 +611,7 @@ class Fletch extends BaseContainer {
     }
   }
 
-  Future<void> _handleRequestWithTimeout(HttpRequest httpRequest) async {
+  Future<void> _handleRequestWithTimeout(HttpRequest httpRequest) {
     // Reject new requests during shutdown
     if (_isShuttingDown) {
       httpRequest.response
@@ -619,23 +619,22 @@ class Fletch extends BaseContainer {
         ..headers.add('Connection', 'close')
         ..write('Server is shutting down')
         ..close();
-      return;
+      return Future.value();
     }
 
     _activeRequests++;
 
-    try {
-      // requestTimeout is now enforced inside processRequest, scoped to
-      // dispatch only, so it doesn't cut off an already-awaited streaming
-      // response (see handleRequest above). This try/catch remains as a
-      // last-resort safety net for anything that escapes processRequest's
-      // own error handling entirely.
-      await handleRequest(httpRequest);
-    } catch (error, stackTrace) {
-      await _safelySendErrorResponse(httpRequest, error, stackTrace);
-    } finally {
-      _activeRequests--;
-    }
+    // requestTimeout is now enforced inside processRequest, scoped to
+    // dispatch only, so it doesn't cut off an already-awaited streaming
+    // response (see handleRequest above). This catchError remains as a
+    // last-resort safety net for anything that escapes processRequest's
+    // own error handling entirely.
+    // Avoid async/await here so no extra Future wrapper is allocated on the
+    // hot path — handleRequest()'s own Future is chained directly.
+    return handleRequest(httpRequest)
+        .catchError((Object error, StackTrace stackTrace) =>
+            _safelySendErrorResponse(httpRequest, error, stackTrace))
+        .whenComplete(() => _activeRequests--);
   }
 
   Future<void> _safelySendErrorResponse(
