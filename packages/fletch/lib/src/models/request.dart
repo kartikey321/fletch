@@ -522,6 +522,11 @@ class Request {
   static const String _sessionCookieName = 'sessionId';
 
   /// Public accessor for the name of the framework-managed session cookie.
+  ///
+  /// Reserved for the framework's own session handling — `Response.hasCookie`
+  /// checks against this name are name-only (they don't verify the value is
+  /// actually a session id the framework issued). Setting your own cookie
+  /// under this exact name will confuse that logic.
   static const String sessionCookieName = _sessionCookieName;
 }
 
